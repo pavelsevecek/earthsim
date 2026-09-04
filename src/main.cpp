@@ -568,7 +568,7 @@ namespace {
 		}
 	};
 
-	struct Lightning {
+struct Lightning {
 		struct Segment { Vec3 start; float strength; Vec3 end; float width; };
 		struct Strike { std::vector<Segment> segments; float age = 0; };
 		GLuint shader = 0, vao = 0, vbo = 0;
@@ -652,9 +652,76 @@ namespace {
 			glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(visibleSegments.size()));
 			glDepthMask(GL_TRUE); glDisable(GL_BLEND);
 		}
-	};
+};
 
-	// Small ImGui renderer keeps even the UI GLSL in external text files.
+struct Rain {
+    static constexpr uint32_t capacity=32768,wetnessSize=256;
+    struct alignas(16) GpuDrop { float positionAge[4],velocityState[4]; };
+    GLuint compute=0,shader=0,vao=0,drops=0,wetness=0;
+    uint32_t frameSeed=1;
+    double accumulator=0;
+    float intensity=0.55f;
+    explicit Rain(const std::filesystem::path& directory) {
+        compute=computeProgram(directory,"rain_compute");
+        try { shader=program(directory,"rain"); }
+        catch(...) { glDeleteProgram(compute); throw; }
+        glGenBuffers(1,&drops); glBindBuffer(GL_SHADER_STORAGE_BUFFER,drops);
+        std::vector<GpuDrop> inactive(capacity);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,GLsizeiptr(inactive.size()*sizeof(GpuDrop)),inactive.data(),GL_DYNAMIC_DRAW);
+        glGenBuffers(1,&wetness); glBindBuffer(GL_SHADER_STORAGE_BUFFER,wetness);
+        std::vector<uint32_t> dry(wetnessSize*wetnessSize);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,GLsizeiptr(dry.size()*sizeof(uint32_t)),dry.data(),GL_DYNAMIC_DRAW);
+        glGenVertexArrays(1,&vao);
+    }
+    ~Rain() {
+        glDeleteBuffers(1,&wetness); glDeleteBuffers(1,&drops); glDeleteVertexArrays(1,&vao);
+        glDeleteProgram(shader); glDeleteProgram(compute);
+    }
+	void update(double elapsed,bool cloudsEnabled,float cloudCoverage,Vec3 eye,float waterLevel,float time,GLuint terrainTexture,GLuint cloudNoise,
+        GLuint mainParticles,GLuint heads,GLuint next) {
+        constexpr float dt=1.0f/120.0f;
+        accumulator+=elapsed;
+        glUseProgram(compute);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,drops);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,1,mainParticles);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,2,heads);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,3,next);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,4,wetness);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,terrainTexture);
+        glUniform1i(glGetUniformLocation(compute,"terrainHeight"),0);
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_3D,cloudNoise);
+        glUniform1i(glGetUniformLocation(compute,"cloudNoise"),1);
+        glUniform1ui(glGetUniformLocation(compute,"capacity"),capacity);
+		uniform(compute,"intensity",cloudsEnabled?intensity:0.0f); uniform(compute,"cloudCoverage",cloudCoverage);
+		uniform(compute,"waterLevel",waterLevel);
+        uniform(compute,"time",time); uniform(compute,"eye",eye);
+        glUniform1f(glGetUniformLocation(compute,"dt"),dt);
+        auto run=[&](int pass,uint32_t count) {
+            glUniform1i(glGetUniformLocation(compute,"pass"),pass);
+            dispatchCompute((count+127)/128,1,1); memoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        };
+        while(accumulator>=dt) {
+            accumulator-=dt;
+            glUniform1ui(glGetUniformLocation(compute,"frameSeed"),frameSeed++);
+            run(0,wetnessSize*wetnessSize); run(1,capacity);
+        }
+        glActiveTexture(GL_TEXTURE0);
+    }
+    void bindWetness() const { glBindBufferBase(GL_SHADER_STORAGE_BUFFER,7,wetness); }
+    void draw(const Mat4& vp,Vec3 eye,Vec3 right,Vec3 up,float daylight) {
+		glUseProgram(shader);
+        glUniformMatrix4fv(glGetUniformLocation(shader,"viewProjection"),1,GL_FALSE,vp.data());
+        uniform(shader,"eye",eye); uniform(shader,"cameraRight",right); uniform(shader,"cameraUp",up);
+        uniform(shader,"daylight",daylight);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER,0,drops); glBindVertexArray(vao);
+        glEnable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_CULL_FACE);
+        glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glDrawArraysInstanced(GL_TRIANGLES,0,6,GLsizei(capacity));
+        glDepthMask(GL_TRUE); glDisable(GL_BLEND);
+    }
+};
+
+// Small ImGui renderer keeps even the UI GLSL in external text files.
 	struct UiRenderer {
 		GLuint shader = 0, vao = 0, vbo = 0, ebo = 0, font = 0;
 		explicit UiRenderer(const std::filesystem::path& dir) {
@@ -846,7 +913,7 @@ namespace {
 		void endEmission() {
 			glDrawBuffer(GL_COLOR_ATTACHMENT0);
 		}
-		void draw(Vec3 eye, Vec3 forward, Vec3 right, Vec3 up, Vec3 sun, Vec3 fog, float daylight, float opacity, float time, float distance, GLuint destination) {
+		void draw(Vec3 eye, Vec3 forward, Vec3 right, Vec3 up, Vec3 sun, Vec3 fog, float daylight, float opacity, float time, float coverage, float distance, GLuint destination) {
 			glBindFramebuffer(GL_FRAMEBUFFER, cloudFbo); glViewport(0, 0, (width + 1) / 2, (height + 1) / 2);
 			glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_CULL_FACE); glDisable(GL_BLEND);
 			glUseProgram(shader); glBindVertexArray(vao);
@@ -856,7 +923,7 @@ namespace {
 			glUniform1i(glGetUniformLocation(shader, "noiseTexture"), 1);
 			uniform(shader, "eye", eye); uniform(shader, "cameraForward", forward); uniform(shader, "cameraRight", right); uniform(shader, "cameraUp", up);
 			uniform(shader, "sunDirection", sun); uniform(shader, "fogColor", fog); uniform(shader, "daylight", daylight);
-			uniform(shader, "atmosphereOpacity", opacity); uniform(shader, "time", time);
+			uniform(shader, "atmosphereOpacity", opacity); uniform(shader, "time", time); uniform(shader,"cloudCoverage",coverage);
 			uniform(shader, "aspect", float(width) / height); uniform(shader, "tanHalfFov", std::tan(pi / 8));
 			Mat4 projection = perspective(float(width) / height, distance);
 			glUniform2f(glGetUniformLocation(shader, "depthProjection"), projection[10], projection[14]);
@@ -1028,12 +1095,14 @@ namespace {
 		Lightning lightning(directory);
 		UiRenderer ui(directory);
 		Clouds clouds(directory);
+		Rain rain(directory);
 		TerrainShadows shadows(directory);
 		ScreenSpaceGI screenSpaceGI(directory);
 		Bloom bloom(directory);
 		float yaw = 0.65f, pitch = 0.48f, distance = 1050;
 		float atmosphereOpacity = 0.4f;
 		float waterLevel = 0.0f;
+		float cloudCoverage = 0.5f;
 		float cameraExposure = 0.0f;
 		float bloomIntensity = 1.0f;
 		bool cloudsEnabled = true;
@@ -1100,6 +1169,8 @@ namespace {
 			Vec3 fog = Vec3{ 0.012f,0.019f,0.040f }*(1 - daylight) + Vec3{ 0.42f,0.59f,0.72f }*daylight;
 			float sunset = std::exp(-std::abs(sun.y) * 10) * 0.32f;
 			fog = fog * (1 - sunset) + Vec3{ 0.70f,0.23f,0.09f }*sunset;
+			rain.update(elapsed,cloudsEnabled,cloudCoverage,eye,waterLevel,float(simulationTime),volcanoes.gpu.terrainTexture,
+				clouds.noiseTexture,volcanoes.gpu.buffers[0],volcanoes.gpu.buffers[4],volcanoes.gpu.buffers[5]);
 
 			shadows.render(terrain, sun);
 			bloom.resize(w, h);
@@ -1122,6 +1193,7 @@ namespace {
 			uniform(programs.terrain, "eye", eye); uniform(programs.terrain, "sunDirection", sun);
 			uniform(programs.terrain, "daylight", daylight); uniform(programs.terrain, "fogColor", fog);
 			uniform(programs.terrain, "atmosphereOpacity", atmosphereOpacity);
+			rain.bindWetness();
 			shadows.bind(programs.terrain);
 			glBindVertexArray(terrain.vao); glDrawElements(GL_TRIANGLES, terrain.count, GL_UNSIGNED_INT, nullptr);
 			if (placeClick || targetClick) {
@@ -1168,6 +1240,7 @@ namespace {
 			glDepthMask(GL_TRUE); glDisable(GL_BLEND);
 			constexpr float cloudBase = 290.0f;
 			bool vaporAfterClouds = cloudsEnabled && eye.y < cloudBase;
+			if(!vaporAfterClouds) rain.draw(vp,eye,right,up,daylight);
 			if (ssgiEnabled) clouds.beginEmission();
 			volcanoes.draw(vp, shadows.lightMatrices[0], shadows.depth, right, up, eye, sun, daylight, atmosphereOpacity, !vaporAfterClouds);
 			if (ssgiEnabled) {
@@ -1175,12 +1248,13 @@ namespace {
 				screenSpaceGI.draw(clouds.sceneFbo, clouds.sceneDepth, clouds.sceneEmission, w, h, eye, forward, right, up, distance);
 			}
 			if (cloudsEnabled) {
-				clouds.draw(eye, forward, right, up, sun, fog, daylight, atmosphereOpacity, float(simulationTime), distance, bloom.hdrFbo);
+				clouds.draw(eye, forward, right, up, sun, fog, daylight, atmosphereOpacity, float(simulationTime), cloudCoverage, distance, bloom.hdrFbo);
 				glBindFramebuffer(GL_FRAMEBUFFER, bloom.hdrFbo);
 				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, clouds.sceneDepth, 0);
 				glDrawBuffer(GL_COLOR_ATTACHMENT0); glViewport(0, 0, w, h);
 				if (vaporAfterClouds)
 					volcanoes.drawVapor(vp, shadows.lightMatrices[0], shadows.depth, right, up, eye, sun, daylight, atmosphereOpacity);
+				if(vaporAfterClouds) rain.draw(vp,eye,right,up,daylight);
 				lightning.draw(vp, eye, right);
 				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
 			}
@@ -1238,7 +1312,11 @@ namespace {
 			ImGui::SliderFloat("Water level", &waterLevel, -100.0f, 250.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::SetNextItemWidth(180 * uiScale);
 			ImGui::DragFloat("Lightning frequency", &lightning.frequency, 1.f, 0.f, 1.e6f, "%.1f / min");
+			ImGui::SetNextItemWidth(180 * uiScale);
+			ImGui::SliderFloat("Rain intensity",&rain.intensity,0.0f,10.0f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
 			ImGui::Checkbox("Clouds", &cloudsEnabled);
+			ImGui::SetNextItemWidth(180*uiScale);
+			ImGui::SliderFloat("Cloud coverage",&cloudCoverage,0.0f,1.0f,"%.2f",ImGuiSliderFlags_AlwaysClamp);
 			ImGui::Checkbox("Bloom", &bloomEnabled);
 			ImGui::Checkbox("SSGI", &ssgiEnabled);
 			ImGui::Separator();

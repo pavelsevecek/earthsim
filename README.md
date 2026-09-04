@@ -167,13 +167,28 @@ and [CIE function approximations](https://jcgt.org/published/0002/02/01/).
 
 Volumetric clouds drift above the mountains between elevations 290 and 530.
 Their density comes from layered, smoothly interpolated procedural 3D noise.
-A prevailing wind advects the cloud field at 1.5 world units per simulation
+A prevailing wind advects the cloud field at 10 world units per simulation
 second in the same average direction used by the vapor wind force.
 A 64-step ray march integrates light and opacity with short shadow rays toward
 the sun or moon. Clouds render at half resolution and are composited using scene
 depth to preserve terrain silhouettes, including when viewed from above or inside
 the cloud layer. The cloud buffers resize with the window. Cloud shaders are
 external files alongside the terrain, sky, and particle shaders.
+
+Rain uses a separate pool of 32,768 GPU particles. Inactive drops respawn within
+a 1,800-unit camera-centered area only where the shared procedural cloud-density
+field is sufficiently dense. Falling drops accelerate downward, approach a
+wind-driven horizontal velocity, and render as thin motion-aligned streaks. They
+do not enter the position-based fluid solver or its neighbor searches.
+
+Drops sample the GPU terrain height texture and the adjustable water plane. Water
+plane impacts become expanding one-second ripples. Terrain impacts atomically add
+moisture to a 256x256 GPU wetness field, which decays over 45 simulation seconds;
+the terrain shader reads it directly to darken wet ground and add a tight sunlight
+reflection. Drops that contact nearby lava become white, non-interacting vapor in
+the rain pool for three seconds. The **Rain intensity** slider controls spawning
+from 0 to full density. Disabling clouds stops new rain while existing drops finish
+falling, and the shared time-speed control affects all rain behavior.
 
 ## Build and run
 
@@ -215,6 +230,9 @@ to the console with the shader name and driver log. The working directory's
 The overlay displays simulated time, controls, and atmosphere opacity and time-speed sliders.
 The **Clouds** checkbox toggles the cloud layer independently of atmosphere opacity.
 Clouds default to on; disabling them skips cloud rendering and compositing.
+The **Cloud coverage** slider shifts the procedural density threshold from sparse
+cloud fragments at 0 to broad overcast coverage at 1. Rain spawning uses the same
+threshold, so precipitation tracks the visible cloud field.
 The particle-life slider sets the lifetime of both existing and new particles
 in simulation seconds. Shortening it removes particles already older than the
 new limit on the next simulation step. Cooling rates are independent of this setting.

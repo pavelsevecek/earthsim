@@ -6,7 +6,7 @@ uniform sampler3D noiseTexture;
 uniform vec2 depthProjection;
 uniform vec3 eye, cameraForward, cameraRight, cameraUp;
 uniform vec3 sunDirection, fogColor;
-uniform float aspect, tanHalfFov, daylight, atmosphereOpacity, time;
+uniform float aspect, tanHalfFov, daylight, atmosphereOpacity, time, cloudCoverage;
 const vec3 boxMin = vec3(-2200.0, 290.0, -2200.0);
 const vec3 boxMax = vec3(2200.0, 530.0, 2200.0);
 const vec2 prevailingWind = normalize(vec2(0.85, 0.35));
@@ -24,6 +24,7 @@ float cloudNoise3D(vec3 p) {
     return texture(noiseTexture, (cell + f + 0.5) / 64.0).r;
 }
 float density(vec3 p) {
+    if(cloudCoverage <= 0.0001) return 0.0;
     if(any(lessThan(p, boxMin)) || any(greaterThan(p, boxMax))) return 0.0;
     float layer = (p.y - boxMin.y) / (boxMax.y - boxMin.y);
     float profile = smoothstep(0.0, 0.16, layer) * (1.0 - smoothstep(0.48, 1.0, layer));
@@ -31,7 +32,8 @@ float density(vec3 p) {
     vec2 advected = p.xz - prevailingWind * (time * cloudSpeed);
     vec3 q = vec3(advected.x, p.y, advected.y) * 0.007;
     float shape = 0.60 * cloudNoise3D(q) + 0.28 * cloudNoise3D(q * 2.03 + 17.0) + 0.12 * cloudNoise3D(q * 4.11 + 31.0);
-    return smoothstep(0.43, 0.72, shape) * profile * edge;
+    float threshold=mix(0.68,0.18,cloudCoverage);
+    return smoothstep(threshold,threshold+0.29,shape)*profile*edge;
 }
 bool intersectVolume(vec3 ray, out float entry, out float leave) {
     entry = 0.0; leave = 1e20;
@@ -48,7 +50,7 @@ bool intersectVolume(vec3 ray, out float entry, out float leave) {
 }
 void main() {
     fragColor = vec4(0.0);
-    if(atmosphereOpacity <= 0.0) return;
+    if(atmosphereOpacity <= 0.0 || cloudCoverage <= 0.0001) return;
     vec2 screen = uv * 2.0 - 1.0;
     vec3 ray = normalize(cameraForward + tanHalfFov * (screen.x * aspect * cameraRight + screen.y * cameraUp));
     float entry, leave;
