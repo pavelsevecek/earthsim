@@ -1,0 +1,624 @@
+#include "Application.hpp"
+
+#include "Rendering.hpp"
+
+#include <imgui_impl_opengl3.h>
+
+namespace earth_sim {
+class AppState {
+    GLFWwindow* window_;
+    std::filesystem::path directory_;
+    TerrainRenderer terrain_renderer_;
+    SkyRenderer sky_renderer_;
+    WaterRenderer water_renderer_;
+    Terrain terrain_;
+    Volcanoes volcanoes_;
+    Lightning lightning_;
+    Clouds clouds_;
+    Rain rain_;
+    TerrainShadows shadows_;
+    ScreenSpaceGI screen_space_gi_;
+    PlanarReflection reflection_;
+    Bloom bloom_;
+
+    float yaw_ = 0.65f;
+    float pitch_ = 0.48f;
+    float distance_ = 1050;
+    float atmosphere_opacity_ = 0.4f;
+    float water_level_ = 25.f;
+    float cloud_coverage_ = 0.5f;
+    float cloud_opacity_ = 0.4f;
+    float wind_speed_ = 10.0f;
+    float cloud_base_ = 290.0f;
+    static constexpr float cloud_thickness_ = 240.0f;
+    float camera_exposure_ = 0.0f;
+    float bloom_intensity_ = 0.15f;
+    bool clouds_enabled_ = true;
+    bool cloud_simulation_enabled_ = true;
+    bool particle_simulation_enabled_ = true;
+    bool bloom_enabled_ = true;
+    bool ssgi_enabled_ = false;
+    float time_speed_ = 1.0f;
+    float day_phase_offset_ = 0.34f;
+    Vec3 target_{ 0, 50, 0 };
+    bool panning_ = false;
+    bool rotating_ = false;
+    enum class PlacementTool { None, Volcano, Spring, Meteor, TerrainUp, TerrainDown };
+    PlacementTool placement_ = PlacementTool::None;
+    bool placement_miss_ = false;
+    float terrain_brush_radius_ = 85.0f;
+    double previous_;
+    double simulation_time_ = 0.0;
+
+public:
+    AppState(GLFWwindow* window, const char* executable_path)
+        : window_(window)
+        , directory_(shader_directory(executable_path))
+        , terrain_renderer_(directory_)
+        , sky_renderer_(directory_)
+        , water_renderer_(directory_)
+        , terrain_(random_terrain_seed())
+        , volcanoes_(directory_, terrain_)
+        , lightning_(directory_)
+        , clouds_(directory_, volcanoes_.terrain_texture())
+        , rain_(directory_)
+        , shadows_(directory_)
+        , screen_space_gi_(directory_)
+        , reflection_()
+        , bloom_(directory_)
+        , previous_(glfwGetTime()) {}
+
+    void frame();
+};
+
+void AppState::frame() {
+
+    double now = glfwGetTime();
+    // Bound stall recovery consistently for the sky, clouds, and particle physics.
+    double elapsed = std::clamp(now - previous_, 0.0, 0.1) * double(time_speed_);
+    previous_ = now;
+    simulation_time_ += elapsed;
+    float cloud_top = cloud_base_ + cloud_thickness_;
+    if (particle_simulation_enabled_)
+        volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_);
+    lightning_.update(terrain_, elapsed, cloud_base_, cloud_top);
+    static const std::vector<Volcanoes::Meteor> no_moving_meteors;
+    if (cloud_simulation_enabled_)
+        clouds_.update(elapsed,
+            float(simulation_time_),
+            particle_simulation_enabled_ ? volcanoes_.meteors() : no_moving_meteors,
+            volcanoes_.particle_buffer(),
+            particle_simulation_enabled_,
+            wind_speed_,
+            cloud_base_,
+            cloud_top);
+    int framebuffer_width = 0;
+    int framebuffer_height = 0;
+    glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
+    if (framebuffer_width <= 0 || framebuffer_height <= 0) {
+        glfwWaitEventsTimeout(0.05);
+        return;
+    }
+    // Keep UI at native resolution while rendering the HDR scene at half width
+    // and height. The final tone-map pass performs the upscale.
+    int w = std::max(1, (framebuffer_width + 1) / 2);
+    int h = std::max(1, (framebuffer_height + 1) / 2);
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    auto& io = ImGui::GetIO();
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (placement_ != PlacementTool::None) {
+            placement_ = PlacementTool::None;
+            placement_miss_ = false;
+        } else
+            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+    }
+    bool place_click = placement_ != PlacementTool::None && !io.WantCaptureMouse &&
+                       ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    bool target_click = placement_ == PlacementTool::None && !io.WantCaptureMouse &&
+                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    if (placement_ != PlacementTool::None && !io.WantCaptureMouse)
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (!io.WantCaptureMouse) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && placement_ == PlacementTool::None &&
+            !target_click)
+            panning_ = true;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            rotating_ = true;
+    }
+    if (target_click)
+        panning_ = false;
+    bool focused = glfwGetWindowAttrib(window_, GLFW_FOCUSED) != 0;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !focused)
+        panning_ = false;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Right) || !focused)
+        rotating_ = false;
+    if (rotating_) {
+        yaw_ = std::remainder(yaw_ - io.MouseDelta.x * 0.005f, 2 * pi);
+        pitch_ = std::remainder(pitch_ + io.MouseDelta.y * 0.005f, 2 * pi);
+    }
+    if (!io.WantCaptureMouse) {
+        float zoomed = distance_ * std::exp(-io.MouseWheel * 0.12f);
+        // Reject only floating-point overflow/underflow, with no distance limits.
+        if (std::isfinite(zoomed) && zoomed > 0)
+            distance_ = zoomed;
+    }
+    Vec3 orbit{
+        std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_), std::cos(pitch_) * std::cos(yaw_)
+    };
+    // An analytic basis stays stable when orbiting through either pole.
+    Vec3 forward = orbit * (-1);
+    Vec3 right{ std::cos(yaw_), 0, -std::sin(yaw_) };
+    Vec3 up = cross(right, forward);
+    if (panning_) {
+        // Match screen-space dragging at the orbit target, including on HiDPI displays.
+        float units_per_pixel = 2 * distance_ * std::tan(pi / 8) / std::max(io.DisplaySize.y, 1.0f);
+        target_ = target_ + right * (-io.MouseDelta.x * units_per_pixel) +
+                  up * (io.MouseDelta.y * units_per_pixel);
+    }
+    Vec3 eye = target_ + orbit * distance_;
+    double wrapped_day = std::fmod(simulation_time_ / 60.0 + day_phase_offset_, 1.0);
+    if (wrapped_day < 0.0)
+        wrapped_day += 1.0;
+    float day = float(wrapped_day);
+    float angle = 2 * pi * (day - 0.25f);
+    Vec3 sun = normalize({ std::cos(angle), std::sin(angle), 0.30f * std::cos(angle) });
+    float daylight = smooth(-0.15f, 0.22f, sun.y);
+    Vec3 fog =
+        Vec3{ 0.012f, 0.019f, 0.040f } * (1 - daylight) + Vec3{ 0.42f, 0.59f, 0.72f } * daylight;
+    float sunset = std::exp(-std::abs(sun.y) * 10) * 0.32f;
+    fog = fog * (1 - sunset) + Vec3{ 0.70f, 0.23f, 0.09f } * sunset;
+    Mat4 projection = perspective(float(w) / float(h), distance_);
+    Mat4 vp = multiply(projection, look_at(eye, forward, right, up));
+    if (particle_simulation_enabled_)
+        rain_.update(elapsed,
+            clouds_enabled_,
+            cloud_coverage_,
+            eye,
+            water_level_,
+            float(simulation_time_),
+            wind_speed_,
+            cloud_base_,
+            cloud_top,
+            volcanoes_.terrain_texture(),
+            clouds_.density_texture(),
+            volcanoes_.particle_buffer(),
+            volcanoes_.particle_head_buffer(),
+            volcanoes_.particle_next_buffer());
+
+    shadows_.render(terrain_, sun);
+    reflection_.begin(w, h);
+    Vec3 reflected_eye{ eye.x, 2.0f * water_level_ - eye.y, eye.z };
+    Vec3 reflected_forward{ forward.x, -forward.y, forward.z };
+    Vec3 reflected_up{ up.x, -up.y, up.z };
+    // Preserve horizontal screen orientation. The reflected basis is intentionally
+    // mirrored; reflection rendering disables face culling below.
+    Vec3 reflected_right{ right.x, -right.y, right.z };
+    Mat4 reflection_projection =
+        perspective(float(reflection_.width()) / float(reflection_.height()), distance_);
+    Mat4 reflection_vp = multiply(reflection_projection,
+        look_at(reflected_eye, reflected_forward, reflected_right, reflected_up));
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    sky_renderer_.draw(reflected_forward,
+        reflected_right,
+        reflected_up,
+        sun,
+        fog,
+        daylight,
+        atmosphere_opacity_,
+        float(simulation_time_),
+        float(reflection_.width()) / float(reflection_.height()));
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CLIP_DISTANCE0);
+    terrain_renderer_.draw(terrain_,
+        shadows_,
+        rain_,
+        reflection_vp,
+        reflected_eye,
+        sun,
+        fog,
+        daylight,
+        atmosphere_opacity_,
+        true,
+        water_level_,
+        eye.y >= water_level_ ? 1.0f : -1.0f);
+    float reflection_clip_direction = eye.y >= water_level_ ? 1.0f : -1.0f;
+    volcanoes_.draw(reflection_vp,
+        shadows_.light_matrix(0),
+        shadows_.depth_texture(),
+        0,
+        reflection_vp,
+        reflected_right,
+        reflected_up,
+        reflected_eye,
+        sun,
+        daylight,
+        atmosphere_opacity_,
+        float(simulation_time_),
+        true,
+        true,
+        true,
+        water_level_,
+        reflection_clip_direction);
+    rain_.draw(reflection_vp,
+        reflected_eye,
+        reflected_right,
+        reflected_up,
+        daylight,
+        true,
+        water_level_,
+        reflection_clip_direction);
+    lightning_.draw(reflection_vp,
+        reflected_eye,
+        reflected_right,
+        true,
+        water_level_,
+        reflection_clip_direction);
+    glDisable(GL_CLIP_DISTANCE0);
+    bloom_.resize(w, h);
+    // HDR scene/depth are required even when the optional cloud pass is disabled.
+    clouds_.begin_scene(w, h);
+    glViewport(0, 0, w, h);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    sky_renderer_.draw(forward,
+        right,
+        up,
+        sun,
+        fog,
+        daylight,
+        atmosphere_opacity_,
+        float(simulation_time_),
+        float(w) / float(h));
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    terrain_renderer_.draw(
+        terrain_, shadows_, rain_, vp, eye, sun, fog, daylight, atmosphere_opacity_);
+    if (place_click || target_click) {
+        // Read only for a surface action, before particles/clouds/UI are drawn.
+        // The scene depth selects the visible triangle, including mountain occlusion.
+        int px = int(std::floor(io.MousePos.x * float(w) / io.DisplaySize.x));
+        int py = h - 1 - int(std::floor(io.MousePos.y * float(h) / io.DisplaySize.y));
+        if (place_click)
+            placement_miss_ = true;
+        if (px >= 0 && px < w && py >= 0 && py < h) {
+            float depth = 1;
+            glReadPixels(px, py, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+            if (depth < 1) {
+                float sx = 2 * (float(px) + 0.5f) / w - 1;
+                float sy = 2 * (float(py) + 0.5f) / h - 1;
+                Vec3 ray = forward + right * (sx * float(w) / h * std::tan(pi / 8)) +
+                           up * (sy * std::tan(pi / 8));
+                float view_distance = projection[14] / (2 * depth - 1 + projection[10]);
+                Vec3 position = eye + ray * view_distance;
+                position.x = std::clamp(position.x, -1000.0f, 1000.0f);
+                position.z = std::clamp(position.z, -1000.0f, 1000.0f);
+                Vec3 normal;
+                position.y = terrain_.surface(position.x, position.z, normal);
+                if (target_click)
+                    target_ = position;
+                else if (placement_ == PlacementTool::TerrainUp ||
+                         placement_ == PlacementTool::TerrainDown) {
+                    float elevation = placement_ == PlacementTool::TerrainUp ? 18.0f : -18.0f;
+                    terrain_.deform(position, terrain_brush_radius_, elevation);
+                    volcanoes_.terrain_changed(terrain_);
+                    placement_miss_ = false;
+                } else {
+                    if (placement_ == PlacementTool::Volcano)
+                        volcanoes_.add_volcano(position);
+                    else if (placement_ == PlacementTool::Spring)
+                        volcanoes_.add_spring(position);
+                    else
+                        volcanoes_.launch_meteor(position);
+                    placement_ = PlacementTool::None;
+                    placement_miss_ = false;
+                }
+            }
+        }
+    }
+    water_renderer_.draw(vp,
+        reflection_vp,
+        reflection_.color_texture(),
+        volcanoes_.terrain_texture(),
+        eye,
+        sun,
+        fog,
+        daylight,
+        atmosphere_opacity_,
+        water_level_,
+        float(simulation_time_));
+    bool vapor_after_clouds = clouds_enabled_ && eye.y < cloud_base_;
+    if (!vapor_after_clouds)
+        rain_.draw(vp, eye, right, up, daylight);
+    if (ssgi_enabled_)
+        clouds_.begin_emission();
+    volcanoes_.draw(vp,
+        shadows_.light_matrix(0),
+        shadows_.depth_texture(),
+        reflection_.color_texture(),
+        reflection_vp,
+        right,
+        up,
+        eye,
+        sun,
+        daylight,
+        atmosphere_opacity_,
+        float(simulation_time_),
+        !vapor_after_clouds);
+    if (ssgi_enabled_) {
+        clouds_.end_emission();
+        screen_space_gi_.draw(clouds_.scene_framebuffer(),
+            clouds_.scene_depth_texture(),
+            clouds_.scene_emission_texture(),
+            w,
+            h,
+            eye,
+            forward,
+            right,
+            up,
+            distance_);
+    }
+    if (clouds_enabled_) {
+        clouds_.draw(eye,
+            forward,
+            right,
+            up,
+            sun,
+            fog,
+            daylight,
+            atmosphere_opacity_,
+            cloud_opacity_,
+            float(simulation_time_),
+            cloud_coverage_,
+            wind_speed_,
+            cloud_base_,
+            cloud_top,
+            distance_,
+            bloom_.hdr_framebuffer());
+        glBindFramebuffer(GL_FRAMEBUFFER, bloom_.hdr_framebuffer());
+        glFramebufferTexture2D(
+            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, clouds_.scene_depth_texture(), 0);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        glViewport(0, 0, w, h);
+        if (vapor_after_clouds)
+            volcanoes_.draw_vapor(vp,
+                shadows_.light_matrix(0),
+                shadows_.depth_texture(),
+                reflection_.color_texture(),
+                reflection_vp,
+                right,
+                up,
+                eye,
+                sun,
+                daylight,
+                atmosphere_opacity_,
+                float(simulation_time_));
+        if (vapor_after_clouds)
+            rain_.draw(vp, eye, right, up, daylight);
+        lightning_.draw(vp, eye, right);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    } else
+        lightning_.draw(vp, eye, right);
+    bloom_.draw(clouds_enabled_ ? bloom_.hdr_color_texture() : clouds_.scene_color_texture(),
+        bloom_enabled_,
+        std::pow(2.0f, camera_exposure_),
+        bloom_intensity_,
+        framebuffer_width,
+        framebuffer_height);
+
+    ImGui::SetNextWindowPos(ImVec2(20 * ui_scale, 20 * ui_scale), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    ImGui::Begin("EarthSim",
+        nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    ImGui::TextColored(ImVec4(0.65f, 0.86f, 0.76f, 1), "E A R T H S I M");
+    ImGui::TextUnformatted("Procedural mountain range");
+    ImGui::Spacing();
+    ImGui::Text("FPS: %.1f", io.Framerate);
+    float time_of_day_hours = day * 24.0f;
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    if (ImGui::SliderFloat("Time of day",
+            &time_of_day_hours,
+            0.0f,
+            23.999f,
+            "%.2f h",
+            ImGuiSliderFlags_AlwaysClamp))
+        day_phase_offset_ += time_of_day_hours / 24.0f - day;
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Time speed", &time_speed_, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+    if (time_speed_ > 0)
+        ImGui::TextDisabled("1 day = %.1f real seconds", 60.0f / time_speed_);
+    else
+        ImGui::TextDisabled("Simulation paused");
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Camera exposure",
+        &camera_exposure_,
+        -5.0f,
+        5.0f,
+        "%+.1f EV",
+        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Bloom intensity", &bloom_intensity_, 0.0f, 3.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::Text("Active volcanoes: %d", int(volcanoes_.volcano_count()));
+    ImGui::Text("Active springs: %d", int(volcanoes_.spring_count()));
+    if (ImGui::Button("Create volcano")) {
+        placement_ = PlacementTool::Volcano;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Create spring")) {
+        placement_ = PlacementTool::Spring;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Meteor strike")) {
+        placement_ = PlacementTool::Meteor;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    if (ImGui::Button("Terrain up")) {
+        placement_ = PlacementTool::TerrainUp;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Terrain down")) {
+        placement_ = PlacementTool::TerrainDown;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Terrain brush radius",
+        &terrain_brush_radius_,
+        10.0f,
+        300.0f,
+        "%.0f",
+        ImGuiSliderFlags_AlwaysClamp);
+    if (placement_ != PlacementTool::None) {
+        const char* placement_prompt =
+            placement_ == PlacementTool::Volcano     ? "Click terrain to place a volcano."
+            : placement_ == PlacementTool::Spring    ? "Click terrain to place a spring."
+            : placement_ == PlacementTool::Meteor    ? "Click terrain to target a meteor."
+            : placement_ == PlacementTool::TerrainUp ? "Click terrain to raise it."
+                                                     : "Click terrain to lower it.";
+        ImGui::TextUnformatted(placement_prompt);
+        ImGui::TextDisabled("Esc cancels placement.");
+        if (ImGui::Button("Cancel placement")) {
+            placement_ = PlacementTool::None;
+            placement_miss_ = false;
+        }
+        if (placement_miss_)
+            ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No terrain here. Click the landscape.");
+    }
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float particle_lifetime = volcanoes_.particle_lifetime();
+    if (ImGui::DragFloat("Particle life", &particle_lifetime, 1.f, 1.0f, 3600.0f, "%.1f s"))
+        volcanoes_.set_particle_lifetime(particle_lifetime);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float particle_brightness = volcanoes_.particle_brightness();
+    if (ImGui::SliderFloat("Particle brightness",
+            &particle_brightness,
+            0.0f,
+            100.0f,
+            "%.2fx",
+            ImGuiSliderFlags_AlwaysClamp))
+        volcanoes_.set_particle_brightness(particle_brightness);
+    ImGui::Checkbox("Particle simulation", &particle_simulation_enabled_);
+    bool particle_interactions = volcanoes_.particle_interactions();
+    if (ImGui::Checkbox("Particle interactions", &particle_interactions))
+        volcanoes_.set_particle_interactions(particle_interactions);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Atmosphere opacity",
+        &atmosphere_opacity_,
+        0.0f,
+        1.0f,
+        "%.2f",
+        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Water level", &water_level_, -100.0f, 250.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float lightning_frequency = lightning_.frequency();
+    if (ImGui::DragFloat(
+            "Lightning frequency", &lightning_frequency, 1.f, 0.f, 1.e6f, "%.1f / min"))
+        lightning_.set_frequency(lightning_frequency);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float rain_intensity = rain_.intensity();
+    if (ImGui::DragFloat("Rain intensity", &rain_intensity, 1.f, 0.0f, 10.0f, "%.2f"))
+        rain_.set_intensity(rain_intensity);
+    ImGui::Checkbox("Clouds", &clouds_enabled_);
+    ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);
+    if (ImGui::Button("Clear clouds"))
+        clouds_.clear_density();
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Cloud coverage", &cloud_coverage_, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Cloud opacity", &cloud_opacity_, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Wind speed", &wind_speed_, 0.0f, 500.0f, "%.1f units/s", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Cloud height", &cloud_base_, 0.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::Checkbox("Bloom", &bloom_enabled_);
+    // ImGui::Checkbox("SSGI", &ssgiEnabled);
+    ImGui::Separator();
+    ImGui::TextUnformatted(
+        "Drag left mouse to pan\nDouble-click terrain to focus\nDrag right mouse to "
+        "rotate\nScroll to zoom\nEsc to exit");
+    ImGui::End();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x, 0.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("EarthSim quit",
+        nullptr,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    if (ImGui::Button("X", ImVec2(36.0f * ui_scale, 30.0f * ui_scale)))
+        glfwSetWindowShouldClose(window_, GLFW_TRUE);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glfwSwapBuffers(window_);
+}
+
+Application::Application(GLFWwindow* window, const char* executable_path) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui::StyleColorsDark();
+    auto& style = ImGui::GetStyle();
+    style.WindowRounding = 10;
+    style.WindowPadding = ImVec2(18, 16);
+    style.ItemSpacing = ImVec2(8, 8);
+    style.ScaleAllSizes(ui_scale);
+    ImFontConfig font_config;
+    font_config.SizePixels = 13.0f * ui_scale;
+    ImGui::GetIO().Fonts->AddFontDefault(&font_config);
+    if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
+        ImGui::DestroyContext();
+        throw std::runtime_error("Failed to initialize ImGui GLFW backend.");
+    }
+    if (!ImGui_ImplOpenGL3_Init("#version 430")) {
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        throw std::runtime_error("Failed to initialize ImGui OpenGL backend.");
+    }
+    try {
+        state_ = std::make_unique<AppState>(window, executable_path);
+    } catch (...) {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        throw;
+    }
+}
+
+Application::~Application() {
+    state_.reset();
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+}
+
+void Application::frame() {
+    state_->frame();
+}
+} // namespace earth_sim

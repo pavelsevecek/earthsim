@@ -271,6 +271,13 @@ falling, and the shared time-speed control affects all rain behavior.
 
 ## Build and run
 
+The source is split by responsibility: `Application` owns frame state and orchestration,
+`Terrain` owns procedural generation and terrain geometry, `Physics` contains particles,
+rain, and lightning, and `Rendering` provides dedicated `TerrainRenderer`, `SkyRenderer`,
+and `WaterRenderer` classes alongside scene targets and post-processing. `Shaders` loads
+and compiles external GLSL files. `main.cpp` only initializes the GLFW/OpenGL window and
+drives the application event loop.
+
 Requires CMake 3.20+, a C++17 compiler, and an OpenGL 4.3-capable graphics driver.
 Windows builds statically link the bundled GLEW library, so no GLEW DLL is required.
 Dependencies are taken from `externals/glfw` and `externals/imgui`; no downloads
@@ -294,10 +301,12 @@ cmake --build build
 ```
 
 CMake copies `shaders/` beside the executable. Keep this folder with EarthSim
-when moving the app. All shaders, including the ImGui and particle shaders, are loaded
-from text files and compiled at startup. Read/compile/link failures are reported
-to the console with the shader name and driver log. The working directory's
-`shaders/` folder is used as a fallback if no adjacent folder exists.
+when moving the app. EarthSim's shaders, including the particle shaders, are loaded
+from text files and compiled at startup. Dear ImGui uses its official OpenGL 3
+renderer backend and the backend's embedded third-party shaders. Read/compile/link
+failures in EarthSim shaders are reported to the console with the shader name and
+driver log. The working directory's `shaders/` folder is used as a fallback if no
+adjacent folder exists.
 
 ## Controls
 
@@ -381,4 +390,3 @@ camera rotation and zoom, resize and
 minimize/restore, and observe a complete sunrise-to-sunrise cycle over 60 seconds.
 Inspect clouds from above and below, pan into the layer, and check terrain edges
 and the atmosphere slider at both endpoints.
-To check startup diagnostics, temporarily rename a shader and restart the app.

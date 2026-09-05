@@ -1,0 +1,855 @@
+#include "Physics.hpp"
+
+namespace earth_sim {
+Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
+    const Terrain& terrain) {
+    compute = compute_program(directory, "particle_compute");
+    glGenBuffers(GLsizei(buffers.size()), buffers.data());
+    const GLsizeiptr sizes[] = { GLsizeiptr(capacity_ * sizeof(GpuParticle)),
+        GLsizeiptr(capacity_ * 4 * sizeof(float)),
+        GLsizeiptr(capacity_ * 4 * sizeof(float)),
+        GLsizeiptr(capacity_ * sizeof(float)),
+        GLsizeiptr(buckets_ * sizeof(int)),
+        GLsizeiptr(capacity_ * sizeof(int)) };
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[i]);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, sizes[i], nullptr, GL_DYNAMIC_DRAW);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
+    }
+    std::vector<GpuParticle> inactive(capacity_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER,
+        0,
+        GLsizeiptr(inactive.size() * sizeof(GpuParticle)),
+        inactive.data());
+    glGenTextures(1, &terrain_texture);
+    upload_terrain(terrain);
+}
+
+Volcanoes::GpuSimulation::~GpuSimulation() {
+    glDeleteProgram(compute);
+    glDeleteBuffers(GLsizei(buffers.size()), buffers.data());
+    glDeleteTextures(1, &terrain_texture);
+}
+
+void Volcanoes::GpuSimulation::upload_terrain(const Terrain& terrain) {
+    glBindTexture(GL_TEXTURE_2D, terrain_texture);
+    glTexImage2D(GL_TEXTURE_2D,
+        0,
+        GL_R32F,
+        Terrain::cell_count() + 1,
+        Terrain::cell_count() + 1,
+        0,
+        GL_RED,
+        GL_FLOAT,
+        terrain.height_data().data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+void Volcanoes::GpuSimulation::spawn(const std::vector<GpuParticle>& records) {
+    if (records.empty())
+        return;
+    size_t source = 0;
+    while (source < records.size()) {
+        size_t count = std::min(records.size() - source, size_t(capacity_ - cursor));
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER,
+            GLintptr(cursor * sizeof(GpuParticle)),
+            GLsizeiptr(count * sizeof(GpuParticle)),
+            records.data() + source);
+        cursor = (cursor + uint32_t(count)) % capacity_;
+        source += count;
+    }
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+void Volcanoes::GpuSimulation::step(float dt,
+    bool interactions,
+    float lifetime,
+    float water_level,
+    float wind_speed) {
+    glUseProgram(compute);
+    for (size_t i = 0; i < buffers.size(); ++i)
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, terrain_texture);
+    glUniform1i(glGetUniformLocation(compute, "terrainHeight"), 0);
+    glUniform1ui(glGetUniformLocation(compute, "capacity"), capacity_);
+    glUniform1f(glGetUniformLocation(compute, "dt"), dt);
+    glUniform1f(glGetUniformLocation(compute, "particleLifetime"), lifetime);
+    glUniform1f(glGetUniformLocation(compute, "waterLevel"), water_level);
+    glUniform1f(glGetUniformLocation(compute, "windSpeed"), wind_speed);
+    glUniform1i(glGetUniformLocation(compute, "interactions"), interactions ? 1 : 0);
+    auto run = [&](int pass, uint32_t count) {
+        glUniform1i(glGetUniformLocation(compute, "pass"), pass);
+        glDispatchCompute((count + 127) / 128, 1, 1);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    };
+    run(0, std::max(capacity_, buckets_));
+    run(1, capacity_);
+    // Phase changes need the hash even when fluid interactions are disabled.
+    run(0, buckets_);
+    run(2, capacity_);
+    run(9, capacity_);
+    for (int iteration = 0; interactions && iteration < 3; ++iteration) {
+        run(0, buckets_);
+        run(2, capacity_);
+        run(3, capacity_);
+        run(4, capacity_);
+        run(5, capacity_);
+    }
+    if (interactions) {
+        run(0, buckets_);
+        run(2, capacity_);
+    }
+    run(6, capacity_);
+    run(7, capacity_);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+}
+
+// Integrate Planck radiance against the Wyman/Sloan/Shirley CIE 1931 fits:
+// https://jcgt.org/published/0002/02/01/ (wavelengths in nm, temperature in K).
+Vec3 Volcanoes::blackbody(float temperature) {
+    Vec3 xyz{};
+    for (int wavelength = 380; wavelength <= 780; wavelength += 5) {
+        double nm = wavelength;
+        auto gaussian = [nm](double center, double left, double right) {
+            double t = (nm - center) * (nm < center ? left : right);
+            return std::exp(-0.5 * t * t);
+        };
+        double x = 1.056 * gaussian(599.8, .0264, .0323) + .362 * gaussian(442, .0624, .0374) -
+                   .065 * gaussian(501.1, .049, .0382);
+        double y = .821 * gaussian(568.8, .0213, .0247) + .286 * gaussian(530.9, .0613, .0322);
+        double z = 1.217 * gaussian(437, .0845, .0278) + .681 * gaussian(459, .0385, .0725);
+        // A fixed radiance reference preserves cooling-related dimming.
+        double radiance = std::pow(560 / nm, 5) * std::expm1(1.438776877e7 / (560 * 1600.0)) /
+                          std::expm1(1.438776877e7 / (nm * temperature));
+        xyz = xyz + Vec3{ float(x), float(y), float(z) } * float(radiance * 5);
+    }
+    return { std::max(0.0f, 3.2406f * xyz.x - 1.5372f * xyz.y - .4986f * xyz.z),
+        std::max(0.0f, -.9689f * xyz.x + 1.8758f * xyz.y + .0415f * xyz.z),
+        std::max(0.0f, .0557f * xyz.x - .2040f * xyz.y + 1.0570f * xyz.z) };
+}
+
+Vec3 Volcanoes::glow(float temperature) const {
+    float index = std::clamp((temperature - 300) / 1500, 0.0f, 1.0f) * 255;
+    size_t low = std::min(size_t(index), size_t(254));
+    return blackbody_colors_[low] * (1 - (index - low)) +
+           blackbody_colors_[low + 1] * (index - low);
+}
+
+float Volcanoes::range(float low, float high) {
+    return std::uniform_real_distribution<float>(low, high)(random_);
+}
+
+Volcanoes::Volcanoes(const std::filesystem::path& directory, const Terrain& terrain)
+    : gpu_(directory, terrain) {
+    Vec3 reference = blackbody(1600);
+    float scale = 1 / std::max({ reference.x, reference.y, reference.z });
+    for (size_t i = 0; i < blackbody_colors_.size(); ++i)
+        blackbody_colors_[i] = blackbody(300 + 1500 * float(i) / 255) * scale;
+    sprites_.reserve(32);
+    glGenTextures(1, &blackbody_texture_);
+    glBindTexture(GL_TEXTURE_1D, blackbody_texture_);
+    glTexImage1D(GL_TEXTURE_1D,
+        0,
+        GL_RGB32F,
+        GLsizei(blackbody_colors_.size()),
+        0,
+        GL_RGB,
+        GL_FLOAT,
+        blackbody_colors_.data());
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    shader_ = program(directory, "particles");
+    glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &vbo_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Sprite), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(
+        1, 2, GL_FLOAT, GL_FALSE, sizeof(Sprite), reinterpret_cast<void*>(offsetof(Sprite, size)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Sprite),
+        reinterpret_cast<void*>(offsetof(Sprite, emission_color)));
+    glVertexAttribDivisor(0, 1);
+    glVertexAttribDivisor(1, 1);
+    glVertexAttribDivisor(2, 1);
+}
+
+Volcanoes::~Volcanoes() {
+    glDeleteTextures(1, &blackbody_texture_);
+    glDeleteBuffers(1, &vbo_);
+    glDeleteVertexArrays(1, &vao_);
+    glDeleteProgram(shader_);
+}
+
+void Volcanoes::launch_meteor(Vec3 target) {
+    float azimuth = range(0, 2 * pi);
+    float tilt = range(15, 55) * pi / 180;
+    Vec3 approach{
+        std::sin(tilt) * std::cos(azimuth), std::cos(tilt), std::sin(tilt) * std::sin(azimuth)
+    };
+    meteors_.push_back(
+        { target + approach * (700 / approach.y), approach * (-range(650, 900)), 0 });
+}
+
+void Volcanoes::terrain_changed(Terrain& terrain) {
+    gpu_.upload_terrain(terrain);
+    for (auto& vent : vents_) {
+        Vec3 n;
+        vent.y = terrain.surface(vent.x, vent.z, n) + source_clearance_;
+    }
+    for (auto& spring : springs_) {
+        Vec3 n;
+        spring.y = terrain.surface(spring.x, spring.z, n) + source_clearance_;
+    }
+}
+
+void Volcanoes::add_volcano(Vec3 position) {
+    position.y += source_clearance_;
+    vents_.push_back(position);
+}
+
+void Volcanoes::add_spring(Vec3 position) {
+    position.y += source_clearance_;
+    springs_.push_back(position);
+}
+
+size_t Volcanoes::volcano_count() const {
+    return vents_.size();
+}
+
+size_t Volcanoes::spring_count() const {
+    return springs_.size();
+}
+
+const std::vector<Volcanoes::Meteor>& Volcanoes::meteors() const {
+    return meteors_;
+}
+
+GLuint Volcanoes::terrain_texture() const {
+    return gpu_.terrain_texture;
+}
+
+GLuint Volcanoes::particle_buffer() const {
+    return gpu_.buffers[0];
+}
+
+GLuint Volcanoes::particle_head_buffer() const {
+    return gpu_.buffers[4];
+}
+
+GLuint Volcanoes::particle_next_buffer() const {
+    return gpu_.buffers[5];
+}
+
+uint32_t Volcanoes::particle_capacity() {
+    return GpuSimulation::capacity_;
+}
+
+float Volcanoes::particle_lifetime() const {
+    return particle_lifetime_;
+}
+
+void Volcanoes::set_particle_lifetime(float lifetime) {
+    particle_lifetime_ = lifetime;
+}
+
+float Volcanoes::particle_brightness() const {
+    return particle_brightness_;
+}
+
+void Volcanoes::set_particle_brightness(float brightness) {
+    particle_brightness_ = brightness;
+}
+
+bool Volcanoes::particle_interactions() const {
+    return particle_interactions_;
+}
+
+void Volcanoes::set_particle_interactions(bool enabled) {
+    particle_interactions_ = enabled;
+}
+
+void Volcanoes::impact(Terrain& terrain, Vec3 position) {
+    terrain.carve_crater(position, 65.0f);
+    terrain_changed(terrain);
+    constexpr size_t ejecta_count = 1200;
+    std::vector<GpuParticle> records;
+    records.reserve(ejecta_count);
+    for (size_t i = 0; i < ejecta_count; ++i) {
+        float angle = range(0, 2 * pi);
+        float speed = range(10, 50);
+        // Cone surface: exactly 45 degrees from global +Y, independent of slope.
+        float horizontal_speed = speed * std::sin(pi / 4);
+        Vec3 velocity{ std::cos(angle) * horizontal_speed,
+            speed * std::cos(pi / 4),
+            std::sin(angle) * horizontal_speed };
+        float radius = range(0, 18);
+        Vec3 p = position + Vec3{ std::cos(angle) * radius, 2, std::sin(angle) * radius };
+        Vec3 n;
+        p.y = std::max(p.y, terrain.surface(p.x, p.z, n) + 2);
+        p = p + velocity;
+        float size = range(1.2f, 2.8f);
+        float temperature = range(1550, 1800);
+        records.push_back({ { p.x, p.y, p.z, 0 },
+            { velocity.x, velocity.y, velocity.z, 0 },
+            { size, temperature, 7, 1 } });
+    }
+    gpu_.spawn(records);
+}
+
+void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, float wind_speed) {
+    constexpr float dt = 1.0f / 120.0f;
+    // The shared clock bounds real elapsed time before applying the speed multiplier.
+    accumulator_ += elapsed;
+    while (accumulator_ >= dt) {
+        accumulator_ -= dt;
+        for (size_t i = 0; i < meteors_.size();) {
+            auto& meteor = meteors_[i];
+            Vec3 previous_position = meteor.position;
+            Vec3 next = meteor.position + meteor.velocity * dt;
+            Vec3 contact;
+            bool hit = terrain.segment_hit(previous_position, next, contact);
+            if (hit)
+                next = contact;
+            meteor.trail_emission += 600 * dt;
+            while (meteor.trail_emission >= 1) {
+                meteor.trail_emission -= 1;
+                Vec3 p = previous_position + (next - previous_position) * range(0, 1);
+                Vec3 v{ range(-1.5f, 1.5f), range(-0.5f, 0.5f), range(-1.5f, 1.5f) };
+                float life = range(1.5f, 3.0f);
+                float size = range(1.5f, 3.5f);
+                gpu_.spawn({ GpuParticle{
+                    { p.x, p.y, p.z, 0 }, { v.x, v.y, v.z, life }, { size, 1800, 8, 1 } } });
+            }
+            meteor.position = next;
+            if (hit) {
+                impact(terrain, next);
+                meteors_.erase(meteors_.begin() + i);
+            } else if (next.y < terrain.min_height() - 1000)
+                meteors_.erase(meteors_.begin() + i);
+            else
+                ++i;
+        }
+        emission_ += 90 * dt;
+        std::vector<GpuParticle> spawned;
+        while (emission_ >= 1) {
+            emission_ -= 1;
+            for (Vec3 vent : vents_) {
+                Vec3 velocity{ range(-1.2f, 1.2f), range(0.0f, 1.5f), range(-1.2f, 1.2f) };
+                float size = range(1.2f, 2.2f);
+                float temperature = range(1450, 1650);
+                Vec3 spawn = vent + Vec3{ range(-1.0f, 1.0f), 0.25f, range(-1.0f, 1.0f) };
+                Vec3 normal;
+                float ground = terrain.surface(spawn.x, spawn.z, normal);
+                float radius = std::max(0.65f, size * 0.52f);
+                spawn.y = std::max(spawn.y, ground + radius / std::max(normal.y, 0.25f) + 0.25f);
+                spawned.push_back({ { spawn.x, spawn.y, spawn.z, 0 },
+                    { velocity.x, velocity.y, velocity.z, 0 },
+                    { size, temperature, 7, 1 } });
+            }
+            for (Vec3 spring : springs_) {
+                Vec3 velocity{ range(-1.2f, 1.2f), range(0.0f, 1.5f), range(-1.2f, 1.2f) };
+                float size = range(1.2f, 2.2f);
+                Vec3 spawn = spring + Vec3{ range(-1.0f, 1.0f), 0.25f, range(-1.0f, 1.0f) };
+                Vec3 normal;
+                float ground = terrain.surface(spawn.x, spawn.z, normal);
+                float radius = std::max(0.65f, size * 0.52f);
+                spawn.y = std::max(spawn.y, ground + radius / std::max(normal.y, 0.25f) + 0.25f);
+                spawn = spawn + velocity * range(0, 1);
+                velocity = { 0, 0, 0 };
+                // Gravity, terrain collision, and fluid interaction plus the water tag.
+                spawned.push_back({ { spawn.x, spawn.y, spawn.z, 0 },
+                    { velocity.x, velocity.y, velocity.z, 0 },
+                    { size, 300, 23, 1 } });
+            }
+        }
+        gpu_.spawn(spawned);
+        gpu_.step(dt, particle_interactions_, particle_lifetime_, water_level, wind_speed);
+    }
+}
+
+void Volcanoes::prepare_draw(const Mat4& vp,
+    const Mat4& light_vp,
+    GLuint shadow_map,
+    GLuint reflection_texture,
+    const Mat4& reflection_vp,
+    Vec3 right,
+    Vec3 up,
+    Vec3 eye,
+    Vec3 sun,
+    float daylight,
+    float atmosphere_opacity,
+    float time,
+    bool reflection_capture,
+    bool clip_enabled,
+    float clip_height,
+    float clip_direction) {
+    glUseProgram(shader_);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "viewProjection"), 1, GL_FALSE, vp.data());
+    uniform(shader_, "cameraRight", right);
+    uniform(shader_, "cameraUp", up);
+    uniform(shader_, "eye", eye);
+    uniform(shader_, "sunDirection", sun);
+    uniform(shader_, "daylight", daylight);
+    uniform(shader_, "atmosphereOpacity", atmosphere_opacity);
+    uniform(shader_, "particleBrightness", pow(2.f, particle_brightness_));
+    glUniform1f(glGetUniformLocation(shader_, "particleLifetime"), particle_lifetime_);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_1D, blackbody_texture_);
+    glUniform1i(glGetUniformLocation(shader_, "blackbodyColors"), 4);
+    glUniformMatrix4fv(
+        glGetUniformLocation(shader_, "lightViewProjection"), 1, GL_FALSE, light_vp.data());
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, shadow_map);
+    glUniform1i(glGetUniformLocation(shader_, "terrainShadowMap"), 5);
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, reflection_texture);
+    glUniform1i(glGetUniformLocation(shader_, "reflectionTexture"), 6);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "reflectionViewProjection"),
+        1,
+        GL_FALSE,
+        reflection_vp.data());
+    uniform(shader_, "time", time);
+    glUniform1i(glGetUniformLocation(shader_, "reflectionCapture"), reflection_capture ? 1 : 0);
+    glUniform1i(glGetUniformLocation(shader_, "clipEnabled"), clip_enabled ? 1 : 0);
+    uniform(shader_, "clipHeight", clip_height);
+    uniform(shader_, "clipDirection", clip_direction);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, gpu_.buffers[0]);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+}
+
+void Volcanoes::draw(const Mat4& vp,
+    const Mat4& light_vp,
+    GLuint shadow_map,
+    GLuint reflection_texture,
+    const Mat4& reflection_vp,
+    Vec3 right,
+    Vec3 up,
+    Vec3 eye,
+    Vec3 sun,
+    float daylight,
+    float atmosphere_opacity,
+    float time,
+    bool draw_vapor,
+    bool reflection_capture,
+    bool clip_enabled,
+    float clip_height,
+    float clip_direction) {
+    prepare_draw(vp,
+        light_vp,
+        shadow_map,
+        reflection_texture,
+        reflection_vp,
+        right,
+        up,
+        eye,
+        sun,
+        daylight,
+        atmosphere_opacity,
+        time,
+        reflection_capture,
+        clip_enabled,
+        clip_height,
+        clip_direction);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    // GPU particles source every per-instance value from the SSBO. Leaving the
+    // CPU-sprite attributes enabled would make this draw fetch thousands of
+    // records from a VBO that can still have a zero-sized data store.
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+    glUniform1i(glGetUniformLocation(shader_, "gpuParticles"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "renderMode"), 0);
+    glUniform1i(glGetUniformLocation(shader_, "opaquePass"), 1);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(GpuSimulation::capacity_));
+
+    sprites_.clear();
+    for (Vec3 vent : vents_)
+        sprites_.push_back({ vent + Vec3{ 0, 3.0f, 0 }, 5, 1, glow(1600) });
+    for (const auto& meteor : meteors_)
+        sprites_.push_back({ meteor.position, 8, 1, glow(1800) * 3 });
+    if (!sprites_.empty()) {
+        glBufferData(GL_ARRAY_BUFFER,
+            GLsizeiptr(sprites_.size() * sizeof(Sprite)),
+            sprites_.data(),
+            GL_STREAM_DRAW);
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+        glEnableVertexAttribArray(2);
+        glUniform1i(glGetUniformLocation(shader_, "gpuParticles"), 0);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(sprites_.size()));
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+        glDisableVertexAttribArray(2);
+    }
+
+    glUniform1i(glGetUniformLocation(shader_, "gpuParticles"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "renderMode"), 2);
+    glUniform1i(glGetUniformLocation(shader_, "opaquePass"), 0);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(GpuSimulation::capacity_));
+
+    if (draw_vapor) {
+        glUniform1i(glGetUniformLocation(shader_, "renderMode"), 3);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(GpuSimulation::capacity_));
+    }
+
+    glUniform1i(glGetUniformLocation(shader_, "gpuParticles"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "renderMode"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "opaquePass"), 0);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(GpuSimulation::capacity_));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void Volcanoes::draw_vapor(const Mat4& vp,
+    const Mat4& light_vp,
+    GLuint shadow_map,
+    GLuint reflection_texture,
+    const Mat4& reflection_vp,
+    Vec3 right,
+    Vec3 up,
+    Vec3 eye,
+    Vec3 sun,
+    float daylight,
+    float atmosphere_opacity,
+    float time) {
+    prepare_draw(vp,
+        light_vp,
+        shadow_map,
+        reflection_texture,
+        reflection_vp,
+        right,
+        up,
+        eye,
+        sun,
+        daylight,
+        atmosphere_opacity,
+        time,
+        false,
+        false,
+        0.0f,
+        1.0f);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+    glUniform1i(glGetUniformLocation(shader_, "gpuParticles"), 1);
+    glUniform1i(glGetUniformLocation(shader_, "renderMode"), 3);
+    glUniform1i(glGetUniformLocation(shader_, "opaquePass"), 0);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(GpuSimulation::capacity_));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+Lightning::Lightning(const std::filesystem::path& directory) {
+    shader_ = program(directory, "lightning");
+    glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &vbo_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Segment), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(
+        1, 4, GL_FLOAT, GL_FALSE, sizeof(Segment), reinterpret_cast<void*>(offsetof(Segment, end)));
+    glVertexAttribDivisor(0, 1);
+    glVertexAttribDivisor(1, 1);
+}
+
+Lightning::~Lightning() {
+    glDeleteBuffers(1, &vbo_);
+    glDeleteVertexArrays(1, &vao_);
+    glDeleteProgram(shader_);
+}
+
+float Lightning::range(float low, float high) {
+    return std::uniform_real_distribution<float>(low, high)(random_);
+}
+
+std::vector<Vec3> Lightning::path(Vec3 start, Vec3 end, int count, float jitter) {
+    std::vector<Vec3> points;
+    points.reserve(size_t(count + 1));
+    points.push_back(start);
+    for (int i = 1; i < count; ++i) {
+        float t = float(i) / count;
+        float envelope = std::sin(pi * t);
+        Vec3 point = start + (end - start) * t;
+        point = point + Vec3{ range(-jitter, jitter) * envelope,
+            range(-jitter * 0.3f, jitter * 0.3f) * envelope,
+            range(-jitter, jitter) * envelope };
+        points.push_back(point);
+    }
+    points.push_back(end);
+    return points;
+}
+
+void Lightning::append_path(Strike& strike,
+    const std::vector<Vec3>& points,
+    float strength,
+    float width) {
+    for (size_t i = 1; i < points.size(); ++i)
+        strike.segments.push_back(
+            { points[i - 1], strength * range(0.82f, 1.0f), points[i], width });
+}
+
+void Lightning::spawn(const Terrain& terrain, float cloud_base, float cloud_top) {
+    Vec3 origin{ range(-820, 820),
+        range(cloud_base + 0.33f * (cloud_top - cloud_base), cloud_top - 30.0f),
+        range(-820, 820) };
+    float target_x = std::clamp(origin.x + range(-180, 180), -980.0f, 980.0f);
+    float target_z = std::clamp(origin.z + range(-180, 180), -980.0f, 980.0f);
+    Vec3 normal;
+    Vec3 target{ target_x, terrain.surface(target_x, target_z, normal) + 1.0f, target_z };
+    Strike strike;
+    auto main_path = path(origin, target, 22, 24.0f);
+    append_path(strike, main_path, 1.0f, 0.85f);
+    int branch_count = int(range(1.0f, 5.0f));
+    for (int branch = 0; branch < branch_count; ++branch) {
+        int index = int(range(3.0f, float(main_path.size() - 4)));
+        Vec3 start = main_path[size_t(index)];
+        Vec3 end = start + Vec3{ range(-120, 120), -range(55, 150), range(-120, 120) };
+        float ground = terrain.surface(
+            std::clamp(end.x, -999.0f, 999.0f), std::clamp(end.z, -999.0f, 999.0f), normal);
+        end.y = std::max(end.y, ground + 8.0f);
+        append_path(strike, path(start, end, int(range(5.0f, 9.0f)), 13.0f), 0.55f, 0.48f);
+    }
+    strikes_.push_back(std::move(strike));
+}
+
+double Lightning::interval() {
+    double rate = std::max(double(frequency_) / 60.0, 1e-6);
+    return std::exponential_distribution<double>(rate)(random_);
+}
+
+float Lightning::frequency() const {
+    return frequency_;
+}
+
+void Lightning::set_frequency(float frequency) {
+    frequency_ = frequency;
+}
+
+void Lightning::update(const Terrain& terrain, double elapsed, float cloud_base, float cloud_top) {
+    for (auto& strike : strikes_)
+        strike.age += float(elapsed);
+    strikes_.erase(std::remove_if(strikes_.begin(),
+                       strikes_.end(),
+                       [](const Strike& strike) { return strike.age >= 0.4f; }),
+        strikes_.end());
+    if (frequency_ != scheduled_frequency_) {
+        scheduled_frequency_ = frequency_;
+        until_next_ = -1;
+    }
+    if (frequency_ <= 0) {
+        until_next_ = -1;
+        return;
+    }
+    if (until_next_ < 0)
+        until_next_ = interval();
+    until_next_ -= elapsed;
+    while (until_next_ <= 0) {
+        spawn(terrain, cloud_base, cloud_top);
+        until_next_ += interval();
+    }
+}
+
+void Lightning::draw(const Mat4& vp,
+    Vec3 eye,
+    Vec3 camera_right,
+    bool clip_enabled,
+    float clip_height,
+    float clip_direction) {
+    visible_segments_.clear();
+    for (const auto& strike : strikes_) {
+        float fade = 1.0f - smooth(0.1f, 0.4f, strike.age);
+        for (auto segment : strike.segments) {
+            segment.strength *= fade;
+            visible_segments_.push_back(segment);
+        }
+    }
+    if (visible_segments_.empty())
+        return;
+    glUseProgram(shader_);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "viewProjection"), 1, GL_FALSE, vp.data());
+    uniform(shader_, "eye", eye);
+    uniform(shader_, "cameraRight", camera_right);
+    glUniform1i(glGetUniformLocation(shader_, "clipEnabled"), clip_enabled ? 1 : 0);
+    uniform(shader_, "clipHeight", clip_height);
+    uniform(shader_, "clipDirection", clip_direction);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferData(GL_ARRAY_BUFFER,
+        GLsizeiptr(visible_segments_.size() * sizeof(Segment)),
+        visible_segments_.data(),
+        GL_STREAM_DRAW);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(visible_segments_.size()));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+Rain::Rain(const std::filesystem::path& directory) {
+    compute_ = compute_program(directory, "rain_compute");
+    try {
+        shader_ = program(directory, "rain");
+    } catch (...) {
+        glDeleteProgram(compute_);
+        throw;
+    }
+    glGenBuffers(1, &drops_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, drops_);
+    std::vector<GpuDrop> inactive(capacity_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+        GLsizeiptr(inactive.size() * sizeof(GpuDrop)),
+        inactive.data(),
+        GL_DYNAMIC_DRAW);
+    glGenBuffers(1, &wetness_);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, wetness_);
+    std::vector<uint32_t> dry(wetness_size_ * wetness_size_);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+        GLsizeiptr(dry.size() * sizeof(uint32_t)),
+        dry.data(),
+        GL_DYNAMIC_DRAW);
+    glGenVertexArrays(1, &vao_);
+}
+
+Rain::~Rain() {
+    glDeleteBuffers(1, &wetness_);
+    glDeleteBuffers(1, &drops_);
+    glDeleteVertexArrays(1, &vao_);
+    glDeleteProgram(shader_);
+    glDeleteProgram(compute_);
+}
+
+float Rain::intensity() const {
+    return intensity_;
+}
+
+void Rain::set_intensity(float intensity) {
+    intensity_ = intensity;
+}
+
+void Rain::update(double elapsed,
+    bool clouds_enabled,
+    float cloud_coverage,
+    Vec3 eye,
+    float water_level,
+    float time,
+    float wind_speed,
+    float cloud_base,
+    float cloud_top,
+    GLuint terrain_texture,
+    GLuint cloud_density,
+    GLuint main_particles,
+    GLuint heads,
+    GLuint next) {
+    constexpr float dt = 1.0f / 120.0f;
+    accumulator_ += elapsed;
+    glUseProgram(compute_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, drops_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, main_particles);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, heads);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, next);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, wetness_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, terrain_texture);
+    glUniform1i(glGetUniformLocation(compute_, "terrainHeight"), 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, cloud_density);
+    glUniform1i(glGetUniformLocation(compute_, "cloudDensityTexture"), 1);
+    glUniform1ui(glGetUniformLocation(compute_, "capacity"), capacity_);
+    uniform(compute_, "intensity", clouds_enabled ? intensity_ : 0.0f);
+    uniform(compute_, "cloudCoverage", cloud_coverage);
+    uniform(compute_, "waterLevel", water_level);
+    uniform(compute_, "windSpeed", wind_speed);
+    uniform(compute_, "cloudBase", cloud_base);
+    uniform(compute_, "cloudTop", cloud_top);
+    uniform(compute_, "time", time);
+    uniform(compute_, "eye", eye);
+    glUniform1f(glGetUniformLocation(compute_, "dt"), dt);
+    auto run = [&](int pass, uint32_t count) {
+        glUniform1i(glGetUniformLocation(compute_, "pass"), pass);
+        glDispatchCompute((count + 127) / 128, 1, 1);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    };
+    while (accumulator_ >= dt) {
+        accumulator_ -= dt;
+        glUniform1ui(glGetUniformLocation(compute_, "frameSeed"), frame_seed_++);
+        run(0, wetness_size_ * wetness_size_);
+        run(1, capacity_);
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void Rain::bind_wetness() const {
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, wetness_);
+}
+
+void Rain::draw(const Mat4& vp,
+    Vec3 eye,
+    Vec3 right,
+    Vec3 up,
+    float daylight,
+    bool clip_enabled,
+    float clip_height,
+    float clip_direction) {
+    glUseProgram(shader_);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "viewProjection"), 1, GL_FALSE, vp.data());
+    uniform(shader_, "eye", eye);
+    uniform(shader_, "cameraRight", right);
+    uniform(shader_, "cameraUp", up);
+    uniform(shader_, "daylight", daylight);
+    glUniform1i(glGetUniformLocation(shader_, "clipEnabled"), clip_enabled ? 1 : 0);
+    uniform(shader_, "clipHeight", clip_height);
+    uniform(shader_, "clipDirection", clip_direction);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, drops_);
+    glBindVertexArray(vao_);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, GLsizei(capacity_));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+} // namespace earth_sim

@@ -29,11 +29,25 @@ add_library(earthsim_imgui STATIC
     externals/imgui/imgui_draw.cpp
     externals/imgui/imgui_tables.cpp
     externals/imgui/imgui_widgets.cpp
-    externals/imgui/backends/imgui_impl_glfw.cpp)
+    externals/imgui/backends/imgui_impl_glfw.cpp
+    externals/imgui/backends/imgui_impl_opengl3.cpp)
 target_include_directories(earthsim_imgui PUBLIC externals/imgui externals/imgui/backends)
 target_link_libraries(earthsim_imgui PUBLIC glfw)
 
-add_executable(EarthSim src/main.cpp)
+add_executable(EarthSim
+    src/main.cpp
+    src/Application.cpp
+    src/Application.hpp
+    src/Common.cpp
+    src/Common.hpp
+    src/Physics.cpp
+    src/Physics.hpp
+    src/Rendering.cpp
+    src/Rendering.hpp
+    src/Shaders.cpp
+    src/Shaders.hpp
+    src/Terrain.cpp
+    src/Terrain.hpp)
 target_compile_features(EarthSim PRIVATE cxx_std_17)
 target_include_directories(EarthSim PRIVATE externals/glew/include)
 if(WIN32)
