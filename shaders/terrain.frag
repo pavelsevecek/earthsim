@@ -24,7 +24,7 @@ float terrainNoise(vec2 position) {
 }
 float hazeOpticalDepth(float distanceToEye) {
     float distanceBeyondClearAir=max(distanceToEye-300.0,0.0);
-    return pow(distanceBeyondClearAir/1200.0,2.4)*atmosphereOpacity;
+    return pow(distanceBeyondClearAir/1200.0,2.4)*atmosphereOpacity*0.025;
 }
 float terrainVisibility(int layer, vec3 geometricNormal, vec3 lightDirection) {
     vec3 p = shadowPosition[layer].xyz / shadowPosition[layer].w * 0.5 + 0.5;

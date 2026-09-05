@@ -1,6 +1,6 @@
 # EarthSim
 
-A C++17 / OpenGL 4.3 mountain landscape using the bundled GLFW and Dear ImGui.
+A C++17 / OpenGL 4.3 mountain landscape using the bundled GLFW, GLEW, and Dear ImGui.
 Each launch generates a random terrain seed and uses it to create three to five
 mountain ranges. Every range has a randomized center, compass orientation, length,
 width, curvature, phase, and amplitude. The strongest local range envelope shapes
@@ -95,6 +95,10 @@ Procedural shoreline foam follows the live GPU terrain-height texture, including
 sculpted terrain and meteor craters. A shallow-depth band combines two scales of
 advected noise with moving wave fronts, producing broken white foam that becomes
 denser and more opaque near contact while remaining dimly moonlit at night.
+Water uses the same reduced atmosphere-opacity-controlled nonlinear haze curve as the
+terrain. Haze is composited over both the reflective surface and the terrain seen
+through it, so distant water converges to the current daylight or nighttime fog
+color instead of becoming artificially transparent.
 When a particle crosses below the adjustable water level, spring-water particles
 merge into the water body and disappear. Lava and meteor-impact ejecta instead
 convert immediately into white, rising vapor; their vapor age restarts at the
@@ -113,6 +117,12 @@ Vapor samples the sunlight layer of the existing terrain shadow map with a 3x3
 filtered comparison. Fully illuminated vapor stays bright during the day, mountain
 shadows reduce it to a small ambient contribution, and nighttime reduces it to a
 faint 2.5% base level.
+When a rising vapor particle enters the simulated cloud volume between elevations
+290 and 530, a GPU deposition pass distributes its moisture over a 3x3x3 voxel
+neighborhood and consumes the particle. The next cloud advection step adds that
+moisture to the mutable density field, where wind, turbulence, and pressure can
+move it normally. No particle data is read back to the CPU. Pausing particle
+simulation also pauses vapor deposition, so frozen particles are never removed.
 Cloud-vapor sorting uses a temporary rendering-order approximation. Below the
 cloud base (elevation 290), vapor renders after the cloud composite and reuses
 terrain depth for mountain occlusion, placing nearby vapor in front of the clouds.
@@ -143,6 +153,11 @@ The **Particle interactions** checkbox defaults to on. Turning it off skips
 density constraints, neighbor searches, and inter-particle viscosity while
 preserving gravity, terrain collisions, friction, cooling, particle lifetimes,
 and the lava-water phase-change query.
+The **Particle simulation** checkbox also defaults to on. Disabling it skips all
+particle updates without clearing any buffers: lava, water, vapor, meteors,
+emission, cooling, aging, rain, and ripples remain frozen and resume from the same
+state when enabled again. Frozen meteors do not repeatedly disturb the independently
+running cloud simulation.
 
 Click **Meteor strike**, then click the terrain to target an impact. A glowing
 meteor starts 700 units above the target, approaches from a random compass direction
@@ -173,6 +188,8 @@ uses a cached integration of Planck's spectrum
 against approximate CIE 1931 color-matching functions, converted to linear sRGB.
 A fixed exposure lets the emission redden and dim naturally as temperature falls.
 Sky, terrain, particles, and clouds remain in linear HDR through compositing.
+The 3D scene renders at half the window width and height and is upscaled during
+the final tone-mapping pass. ImGui remains at native framebuffer resolution.
 Bloom uses a full HDR mip pyramid down to the first level smaller than 4 pixels,
 with the same weighted 13-tap downsample and texel-sized 3x3 tent upsample as
 SpaceSim's `BloomEffect`. Bright single-pixel sources retain their energy during
@@ -211,9 +228,26 @@ References: [Planck radiation](https://www.pbr-book.org/4ed/Radiometry%2C_Spectr
 and [CIE function approximations](https://jcgt.org/published/0002/02/01/).
 
 Volumetric clouds drift above the mountains between elevations 290 and 530.
-Their density comes from layered, smoothly interpolated procedural 3D noise.
-A prevailing wind advects the cloud field at 10 world units per simulation
-second in the same average direction used by the vapor wind force.
+Their mutable density is stored in a `256x32x256` `R16F` 3D texture. GPU compute
+shaders update it at 15 simulation steps per second using semi-Lagrangian
+advection through a matching velocity field. Wind relaxation, animated
+turbulence, density buoyancy, divergence calculation, ten pressure iterations,
+and pressure projection operate on ping-pong 3D textures. Density slowly relaxes
+toward the original procedural field over a 900-second time scale, preventing
+permanent numerical dissipation while preserving disturbances for a long time.
+The density, velocity, pressure, and divergence volumes use approximately 52 MiB
+of GPU memory. Fine procedural noise remains in the renderer so the simulation
+grid does not determine the smallest visible cloud detail.
+
+Meteors crossing elevations near the cloud layer inject a 240-unit-radius
+cylindrical impulse around their flight path. The impulse is applied after fluid
+pressure projection so incompressibility cannot erase the explosive divergence.
+Because the projectile core is smaller than the simulation can resolve reliably,
+an additional conservative-looking displacement step clears density from the
+core and accumulates part of it in a compressed outer rim. The impulse follows
+the moving meteor over several cloud-simulation steps, pushing velocity and
+density away from the trajectory to form a large, persistent turbulent opening. This reuses the current
+meteor positions and velocities without CPU readback or a second physics update.
 A 64-step ray march integrates light and opacity with short shadow rays toward
 the sun or moon. Clouds render at half resolution and are composited using scene
 depth to preserve terrain silhouettes, including when viewed from above or inside
@@ -221,7 +255,7 @@ the cloud layer. The cloud buffers resize with the window. Cloud shaders are
 external files alongside the terrain, sky, and particle shaders.
 
 Rain uses a separate pool of 32,768 GPU particles. Inactive drops respawn within
-a 1,800-unit camera-centered area only where the shared procedural cloud-density
+a 1,800-unit camera-centered area only where the shared simulated cloud-density
 field is sufficiently dense. Falling drops accelerate downward, approach a
 wind-driven horizontal velocity, and render as thin motion-aligned streaks. They
 do not enter the position-based fluid solver or its neighbor searches.
@@ -238,6 +272,7 @@ falling, and the shared time-speed control affects all rain behavior.
 ## Build and run
 
 Requires CMake 3.20+, a C++17 compiler, and an OpenGL 4.3-capable graphics driver.
+Windows builds statically link the bundled GLEW library, so no GLEW DLL is required.
 Dependencies are taken from `externals/glfw` and `externals/imgui`; no downloads
 are performed by the project. Linux additionally needs the development packages
 for the GLFW window-system backends enabled on that machine.
@@ -275,12 +310,29 @@ to the console with the shader name and driver log. The working directory's
 - **Mouse wheel / trackpad scroll:** zoom.
 - **Escape:** exit.
 
-The overlay displays simulated time, controls, and atmosphere opacity and time-speed sliders.
+The overlay displays the current smoothed FPS, simulated time, controls, and
+atmosphere opacity and time-speed sliders.
 The **Clouds** checkbox toggles the cloud layer independently of atmosphere opacity.
 Clouds default to on; disabling them skips cloud rendering and compositing.
 The **Cloud coverage** slider shifts the procedural density threshold from sparse
 cloud fragments at 0 to broad overcast coverage at 1. Rain spawning uses the same
 threshold, so precipitation tracks the visible cloud field.
+The **Cloud opacity** slider independently controls volumetric cloud extinction
+from fully transparent at 0 to dense at 1. It does not change cloud simulation,
+coverage, or rain. Atmosphere opacity continues to control sky and distance haze
+without changing cloud opacity.
+The **Wind speed** slider controls the prevailing horizontal wind used by cloud
+advection, fine cloud detail, rain, and rising vapor. The **Cloud height** slider
+moves the base of the cloud volume; the layer retains its 240-unit thickness, and
+rain spawning, vapor deposition, lightning origins, and meteor shockwaves follow it.
+The cloud simulation samples the terrain height map and forces density to zero in
+voxels at or below the surface, preventing low cloud layers from occupying mountains.
+The **Cloud simulation** checkbox defaults to on. Disabling it skips the fluid
+compute passes and freezes the density, velocity, and pressure volumes. Clouds
+remain visible and rain continues sampling the frozen density field.
+The **Clear clouds** button sets both GPU cloud-density volumes to zero immediately.
+With simulation enabled, the procedural equilibrium restores density over its
+slow 900-second time scale and newly deposited vapor can create cloud density.
 The particle-life slider sets the lifetime of both existing and new particles
 in simulation seconds. Shortening it removes particles already older than the
 new limit on the next simulation step. Cooling rates are independent of this setting.
@@ -292,12 +344,13 @@ to 4×, with 1× as the default. It scales the
 day-night cycle, cloud drift, particle motion, emission, cooling, and lifetimes
 together. Camera controls remain responsive while paused. Changing speed preserves
 the current simulation time without jumping to a different time of day.
-Opacity ranges from 0 (no sky atmosphere, clouds, or terrain haze) to 1 (full atmosphere).
-Terrain, particle, and cloud haze keep the first 300 world units clear. Beyond
-that distance, optical depth grows with distance to the power 2.4 before entering
-the exponential transmittance function. This preserves nearby and middle-distance
-contrast while making the far landscape become opaque quickly. Atmosphere opacity
-scales this optical depth. Daytime starlight uses a separate strong exponential
+Atmosphere opacity ranges from 0 (no sky atmosphere or terrain haze) to 1 (full atmosphere).
+Terrain, water, particle, and cloud-distance haze keep the first 300 world units
+clear. Beyond that distance, optical depth grows with distance to the power 2.4
+before entering the exponential transmittance function, then uses 2.5% of the
+background atmosphere strength. Atmosphere opacity scales this reduced scene
+optical depth. The sky background retains its original atmosphere strength, and
+daytime starlight uses its separate strong exponential
 extinction, leaving less than 0.005% visible at full daylight and atmosphere.
 Camera zoom has no fixed distance limits, and the camera can orbit below the
 horizon and through the terrain. The shared clock scales elapsed real time and

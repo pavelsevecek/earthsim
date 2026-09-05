@@ -2,6 +2,7 @@
 in vec3 worldPosition;
 uniform vec3 sunDirection;
 uniform vec3 eye;
+uniform vec3 fogColor;
 uniform float daylight;
 uniform float atmosphereOpacity;
 uniform float time;
@@ -30,6 +31,11 @@ float dielectricFresnel(float cosineIncident,float etaIncident,float etaTransmit
     float parallel=(etaTransmitted*cosineIncident-etaIncident*cosineTransmitted)
         /(etaTransmitted*cosineIncident+etaIncident*cosineTransmitted);
     return 0.5*(perpendicular*perpendicular+parallel*parallel);
+}
+float hazeAmount(float distanceToEye) {
+    float distanceBeyondClearAir=max(distanceToEye-300.0,0.0);
+    float opticalDepth=pow(distanceBeyondClearAir/1200.0,2.4)*atmosphereOpacity*0.025;
+    return 1.0-exp(-opticalDepth);
 }
 void main() {
     const vec3 normal=vec3(0.0,1.0,0.0);
@@ -69,5 +75,11 @@ void main() {
     vec3 foamColor=mix(vec3(0.025,0.04,0.065),vec3(0.78,0.90,0.96),daylight);
     color=mix(color,foamColor,foam*0.92);
     alpha=1.0-(1.0-alpha)*(1.0-foam*0.86);
+    // Compose atmospheric haze over both the water surface and whatever remains
+    // visible through it, expressed again as a straight-alpha source layer.
+    float haze=hazeAmount(length(eye-worldPosition));
+    float hazedAlpha=haze+(1.0-haze)*alpha;
+    color=(haze*fogColor+(1.0-haze)*alpha*color)/max(hazedAlpha,0.0001);
+    alpha=hazedAlpha;
     fragColor=vec4(color,alpha);
 }

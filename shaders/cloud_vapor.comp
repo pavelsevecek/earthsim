@@ -1,0 +1,40 @@
+#version 430 core
+layout(local_size_x=128) in;
+struct Particle { vec4 positionAge; vec4 velocityLife; vec4 data; };
+layout(std430,binding=0) buffer Particles { Particle particles[]; };
+layout(std430,binding=1) buffer CloudMoisture { uint moisture[]; };
+uniform uint particleCapacity;
+uniform uint voxelCount;
+uniform ivec3 volumeSize;
+uniform int pass;
+uniform float cloudBase;
+uniform float cloudTop;
+vec3 boxMin() { return vec3(-2200.0,cloudBase,-2200.0); }
+vec3 boxMax() { return vec3(2200.0,cloudTop,2200.0); }
+
+uint voxelIndex(ivec3 p) {
+    return uint((p.z*volumeSize.y+p.y)*volumeSize.x+p.x);
+}
+void main() {
+    uint id=gl_GlobalInvocationID.x;
+    if(pass==0) {
+        if(id<voxelCount) moisture[id]=0u;
+        return;
+    }
+    if(id>=particleCapacity||particles[id].data.w<0.5) return;
+    uint flags=uint(particles[id].data.z);
+    if((flags&32u)==0u) return;
+    vec3 position=particles[id].positionAge.xyz;
+    if(any(lessThan(position,boxMin()))||any(greaterThanEqual(position,boxMax()))) return;
+    vec3 grid=(position-boxMin())/(boxMax()-boxMin())*vec3(volumeSize)-0.5;
+    ivec3 center=ivec3(floor(grid+0.5));
+    for(int z=-1;z<=1;++z) for(int y=-1;y<=1;++y) for(int x=-1;x<=1;++x) {
+        ivec3 cell=center+ivec3(x,y,z);
+        if(any(lessThan(cell,ivec3(0)))||any(greaterThanEqual(cell,volumeSize))) continue;
+        float distanceSquared=dot(vec3(cell)-grid,vec3(cell)-grid);
+        float weight=exp(-0.9*distanceSquared);
+        atomicAdd(moisture[voxelIndex(cell)],uint(12000.0*weight));
+    }
+    // Atmospheric vapor becomes part of the Eulerian cloud volume.
+    particles[id].data.w=0.0;
+}

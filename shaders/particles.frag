@@ -24,7 +24,7 @@ layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 emissiveColor;
 float hazeTransmittance(float distanceToEye) {
     float distanceBeyondClearAir=max(distanceToEye-300.0,0.0);
-    float opticalDepth=pow(distanceBeyondClearAir/1200.0,2.4)*atmosphereOpacity;
+    float opticalDepth=pow(distanceBeyondClearAir/1200.0,2.4)*atmosphereOpacity*0.025;
     return exp(-opticalDepth);
 }
 float sunVisibility() {

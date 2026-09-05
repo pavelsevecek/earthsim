@@ -1,5 +1,4 @@
-#define GLAD_GL_IMPLEMENTATION
-#include <glad/gl.h>
+#include <GL/glew.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -29,20 +28,9 @@
 #endif
 
 namespace {
-	std::ofstream startupLog;
 	void startupDiagnostic(const std::string& message) {
 		std::cerr << message << std::endl;
-		if (startupLog) startupLog << message << std::endl;
 	}
-#ifndef GL_COMPUTE_SHADER
-#define GL_COMPUTE_SHADER 0x91B9
-#define GL_SHADER_STORAGE_BUFFER 0x90D2
-#define GL_SHADER_STORAGE_BARRIER_BIT 0x2000
-#endif
-	using DispatchComputeProc = void (APIENTRY*)(GLuint, GLuint, GLuint);
-	using MemoryBarrierProc = void (APIENTRY*)(GLbitfield);
-	DispatchComputeProc dispatchCompute = nullptr;
-	MemoryBarrierProc memoryBarrier = nullptr;
 	constexpr float pi = 3.14159265358979323846f;
 	constexpr float uiScale = 1.4f;
 	uint32_t terrainSeed = 0;
@@ -354,9 +342,9 @@ namespace {
 					glBufferSubData(GL_SHADER_STORAGE_BUFFER, GLintptr(cursor * sizeof(GpuParticle)), GLsizeiptr(count * sizeof(GpuParticle)), records.data() + source);
 					cursor = (cursor + uint32_t(count)) % capacity; source += count;
 				}
-				memoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 			}
-			void step(float dt, bool interactions, float lifetime, float waterLevel) {
+			void step(float dt, bool interactions, float lifetime, float waterLevel, float windSpeed) {
 				glUseProgram(compute);
 				for (size_t i = 0; i < buffers.size(); ++i) glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
 				glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, terrainTexture);
@@ -365,10 +353,11 @@ namespace {
 				glUniform1f(glGetUniformLocation(compute, "dt"), dt);
 				glUniform1f(glGetUniformLocation(compute, "particleLifetime"), lifetime);
 				glUniform1f(glGetUniformLocation(compute, "waterLevel"), waterLevel);
+				glUniform1f(glGetUniformLocation(compute, "windSpeed"), windSpeed);
 				glUniform1i(glGetUniformLocation(compute, "interactions"), interactions ? 1 : 0);
 				auto run = [&](int pass, uint32_t count) {
 					glUniform1i(glGetUniformLocation(compute, "pass"), pass);
-					dispatchCompute((count + 127) / 128, 1, 1); memoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+					glDispatchCompute((count + 127) / 128, 1, 1); glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 					};
 				run(0, std::max(capacity, buckets)); run(1, capacity);
 				// Phase changes need the hash even when fluid interactions are disabled.
@@ -378,7 +367,7 @@ namespace {
 				}
 				if (interactions) { run(0, buckets); run(2, capacity); }
 				run(6, capacity); run(7, capacity);
-				memoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 			}
 		};
 		GpuSimulation gpu;
@@ -471,7 +460,7 @@ namespace {
 			}
 			gpu.spawn(records);
 		}
-		void update(Terrain& terrain, double elapsed, float waterLevel) {
+		void update(Terrain& terrain, double elapsed, float waterLevel, float windSpeed) {
 			constexpr float dt = 1.0f / 120.0f;
 			// The shared clock bounds real elapsed time before applying the speed multiplier.
 			accumulator += elapsed;
@@ -524,7 +513,7 @@ namespace {
 					}
 				}
 				gpu.spawn(spawned);
-				gpu.step(dt, particleInteractions, particleLifetime, waterLevel);
+				gpu.step(dt, particleInteractions, particleLifetime, waterLevel, windSpeed);
 			}
 		}
 		void prepareDraw(const Mat4& vp, const Mat4& lightVp, GLuint shadowMap, GLuint reflectionTexture, const Mat4& reflectionVp,
@@ -649,8 +638,8 @@ namespace {
 			for (size_t i = 1; i < points.size(); ++i)
 				strike.segments.push_back({ points[i - 1],strength * range(0.82f,1.0f),points[i],width });
 		}
-		void spawn(const Terrain& terrain) {
-			Vec3 origin{ range(-820,820),range(370,500),range(-820,820) };
+		void spawn(const Terrain& terrain, float cloudBase, float cloudTop) {
+			Vec3 origin{ range(-820,820),range(cloudBase + 0.33f * (cloudTop - cloudBase), cloudTop - 30.0f),range(-820,820) };
 			float targetX = std::clamp(origin.x + range(-180, 180), -980.0f, 980.0f);
 			float targetZ = std::clamp(origin.z + range(-180, 180), -980.0f, 980.0f);
 			Vec3 normal; Vec3 target{ targetX,terrain.surface(targetX,targetZ,normal) + 1.0f,targetZ };
@@ -672,14 +661,14 @@ namespace {
 			double rate = std::max(double(frequency) / 60.0, 1e-6);
 			return std::exponential_distribution<double>(rate)(random);
 		}
-		void update(const Terrain& terrain, double elapsed) {
+		void update(const Terrain& terrain, double elapsed, float cloudBase, float cloudTop) {
 			for (auto& strike : strikes) strike.age += float(elapsed);
 			strikes.erase(std::remove_if(strikes.begin(), strikes.end(), [](const Strike& strike) {return strike.age >= 0.4f; }), strikes.end());
 			if (frequency != scheduledFrequency) { scheduledFrequency = frequency; untilNext = -1; }
 			if (frequency <= 0) { untilNext = -1; return; }
 			if (untilNext < 0) untilNext = interval();
 			untilNext -= elapsed;
-			while (untilNext <= 0) { spawn(terrain); untilNext += interval(); }
+			while (untilNext <= 0) { spawn(terrain, cloudBase, cloudTop); untilNext += interval(); }
 		}
 		void draw(const Mat4& vp, Vec3 eye, Vec3 cameraRight, bool clipEnabled = false,
 			float clipHeight = 0.0f, float clipDirection = 1.0f) {
@@ -726,7 +715,8 @@ namespace {
 			glDeleteBuffers(1, &wetness); glDeleteBuffers(1, &drops); glDeleteVertexArrays(1, &vao);
 			glDeleteProgram(shader); glDeleteProgram(compute);
 		}
-		void update(double elapsed, bool cloudsEnabled, float cloudCoverage, Vec3 eye, float waterLevel, float time, GLuint terrainTexture, GLuint cloudNoise,
+		void update(double elapsed, bool cloudsEnabled, float cloudCoverage, Vec3 eye, float waterLevel, float time,
+			float windSpeed, float cloudBase, float cloudTop, GLuint terrainTexture, GLuint cloudDensity,
 			GLuint mainParticles, GLuint heads, GLuint next) {
 			constexpr float dt = 1.0f / 120.0f;
 			accumulator += elapsed;
@@ -738,16 +728,17 @@ namespace {
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, wetness);
 			glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, terrainTexture);
 			glUniform1i(glGetUniformLocation(compute, "terrainHeight"), 0);
-			glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_3D, cloudNoise);
-			glUniform1i(glGetUniformLocation(compute, "cloudNoise"), 1);
+			glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_3D, cloudDensity);
+			glUniform1i(glGetUniformLocation(compute, "cloudDensityTexture"), 1);
 			glUniform1ui(glGetUniformLocation(compute, "capacity"), capacity);
 			uniform(compute, "intensity", cloudsEnabled ? intensity : 0.0f); uniform(compute, "cloudCoverage", cloudCoverage);
 			uniform(compute, "waterLevel", waterLevel);
+			uniform(compute, "windSpeed", windSpeed); uniform(compute, "cloudBase", cloudBase); uniform(compute, "cloudTop", cloudTop);
 			uniform(compute, "time", time); uniform(compute, "eye", eye);
 			glUniform1f(glGetUniformLocation(compute, "dt"), dt);
 			auto run = [&](int pass, uint32_t count) {
 				glUniform1i(glGetUniformLocation(compute, "pass"), pass);
-				dispatchCompute((count + 127) / 128, 1, 1); memoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+				glDispatchCompute((count + 127) / 128, 1, 1); glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 				};
 			while (accumulator >= dt) {
 				accumulator -= dt;
@@ -896,12 +887,22 @@ namespace {
 	};
 
 	struct Clouds {
+		static constexpr int simulationX = 256, simulationY = 32, simulationZ = 256;
 		GLuint sceneFbo = 0, cloudFbo = 0, sceneColor = 0, sceneDepth = 0, sceneEmission = 0, cloudColor = 0, noiseTexture = 0;
 		GLuint shader = 0, composite = 0, vao = 0;
+		GLuint simulation = 0, vaporDeposition = 0, divergenceVolume = 0, vaporMoisture = 0;
+		GLuint terrainHeightTexture = 0;
+		std::array<GLuint, 2> densityVolumes{}, velocityVolumes{}, pressureVolumes{};
+		int densityIndex = 0, velocityIndex = 0, pressureIndex = 0;
+		double simulationAccumulator = 0.0;
 		int width = 0, height = 0;
-		explicit Clouds(const std::filesystem::path& directory) {
+		explicit Clouds(const std::filesystem::path& directory, GLuint terrainTexture) : terrainHeightTexture(terrainTexture) {
 			shader = program(directory, "clouds");
-			try { composite = program(directory, "cloud_composite"); }
+			try {
+				composite = program(directory, "cloud_composite");
+				simulation = computeProgram(directory, "cloud_sim");
+				vaporDeposition = computeProgram(directory, "cloud_vapor");
+			}
 			catch (...) { glDeleteProgram(shader); throw; }
 			glGenVertexArrays(1, &vao);
 			glGenFramebuffers(1, &sceneFbo); glGenFramebuffers(1, &cloudFbo);
@@ -917,11 +918,145 @@ namespace {
 			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 			glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+			glGenTextures(2, densityVolumes.data()); glGenTextures(2, velocityVolumes.data());
+			glGenTextures(2, pressureVolumes.data()); glGenTextures(1, &divergenceVolume);
+			glGenBuffers(1, &vaporMoisture); glBindBuffer(GL_SHADER_STORAGE_BUFFER, vaporMoisture);
+			glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(simulationX * simulationY * simulationZ * sizeof(uint32_t)), nullptr, GL_DYNAMIC_DRAW);
+			auto allocateVolume = [&](GLuint texture, GLint format, GLenum components) {
+				glBindTexture(GL_TEXTURE_3D, texture);
+				glTexImage3D(GL_TEXTURE_3D, 0, format, simulationX, simulationY, simulationZ, 0, components, GL_FLOAT, nullptr);
+				glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+				glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+				glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+				glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
+			};
+			for (GLuint texture : densityVolumes) allocateVolume(texture, GL_R16F, GL_RED);
+			for (GLuint texture : velocityVolumes) allocateVolume(texture, GL_RGBA16F, GL_RGBA);
+			for (GLuint texture : pressureVolumes) allocateVolume(texture, GL_R16F, GL_RED);
+			allocateVolume(divergenceVolume, GL_R16F, GL_RED);
+			glUseProgram(simulation);
+			glUniform3i(glGetUniformLocation(simulation, "volumeSize"), simulationX, simulationY, simulationZ);
+			uniform(simulation, "windSpeed", 10.0f); uniform(simulation, "cloudBase", 290.0f); uniform(simulation, "cloudTop", 530.0f);
+			glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, terrainHeightTexture);
+			glUniform1i(glGetUniformLocation(simulation, "terrainHeight"), 4);
+			auto initialize = [&](GLuint density, GLuint velocity, GLuint scalar, int pass) {
+				glBindImageTexture(0, density, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+				glBindImageTexture(1, velocity, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+				glBindImageTexture(2, scalar, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+				glUniform1i(glGetUniformLocation(simulation, "pass"), pass);
+				glDispatchCompute((simulationX + 3) / 4, (simulationY + 3) / 4, (simulationZ + 3) / 4);
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+			};
+			initialize(densityVolumes[0], velocityVolumes[0], pressureVolumes[0], 0);
+			initialize(densityVolumes[1], velocityVolumes[1], pressureVolumes[1], 0);
+			initialize(densityVolumes[0], velocityVolumes[0], divergenceVolume, 6);
 		}
 		~Clouds() {
 			glDeleteFramebuffers(1, &sceneFbo); glDeleteFramebuffers(1, &cloudFbo);
 			GLuint textures[] = { sceneColor,sceneDepth,sceneEmission,cloudColor,noiseTexture }; glDeleteTextures(5, textures);
-			glDeleteProgram(shader); glDeleteProgram(composite); glDeleteVertexArrays(1, &vao);
+			glDeleteTextures(2, densityVolumes.data()); glDeleteTextures(2, velocityVolumes.data());
+			glDeleteTextures(2, pressureVolumes.data()); glDeleteTextures(1, &divergenceVolume);
+			glDeleteBuffers(1, &vaporMoisture);
+			glDeleteProgram(shader); glDeleteProgram(composite); glDeleteProgram(simulation); glDeleteProgram(vaporDeposition); glDeleteVertexArrays(1, &vao);
+		}
+		GLuint densityTexture() const { return densityVolumes[size_t(densityIndex)]; }
+		void clearDensity() {
+			glUseProgram(simulation);
+			glUniform3i(glGetUniformLocation(simulation, "volumeSize"), simulationX, simulationY, simulationZ);
+			glUniform1i(glGetUniformLocation(simulation, "pass"), 7);
+			for (size_t i = 0; i < densityVolumes.size(); ++i) {
+				glBindImageTexture(0, densityVolumes[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+				glBindImageTexture(1, velocityVolumes[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+				glBindImageTexture(2, pressureVolumes[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+				glDispatchCompute((simulationX + 3) / 4, (simulationY + 3) / 4, (simulationZ + 3) / 4);
+				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+			}
+		}
+		void update(double elapsed, float time, const std::vector<Volcanoes::Meteor>& meteors,
+			GLuint particleBuffer, bool absorbVapor, float windSpeed, float cloudBase, float cloudTop) {
+			constexpr float step = 1.0f / 15.0f;
+			simulationAccumulator += elapsed;
+			while (simulationAccumulator >= step) {
+				simulationAccumulator -= step;
+				constexpr uint32_t voxelCount = uint32_t(simulationX * simulationY * simulationZ);
+				glUseProgram(vaporDeposition);
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particleBuffer);
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, vaporMoisture);
+				glUniform1ui(glGetUniformLocation(vaporDeposition, "particleCapacity"), Volcanoes::GpuSimulation::capacity);
+				glUniform1ui(glGetUniformLocation(vaporDeposition, "voxelCount"), voxelCount);
+				glUniform3i(glGetUniformLocation(vaporDeposition, "volumeSize"), simulationX, simulationY, simulationZ);
+				uniform(vaporDeposition, "cloudBase", cloudBase); uniform(vaporDeposition, "cloudTop", cloudTop);
+				glUniform1i(glGetUniformLocation(vaporDeposition, "pass"), 0);
+				glDispatchCompute((voxelCount + 127) / 128, 1, 1);
+				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+				if (absorbVapor) {
+					glUniform1i(glGetUniformLocation(vaporDeposition, "pass"), 1);
+					glDispatchCompute((Volcanoes::GpuSimulation::capacity + 127) / 128, 1, 1);
+					glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+				}
+				glUseProgram(simulation);
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, vaporMoisture);
+				glActiveTexture(GL_TEXTURE4); glBindTexture(GL_TEXTURE_2D, terrainHeightTexture);
+				glUniform1i(glGetUniformLocation(simulation, "terrainHeight"), 4);
+				glUniform3i(glGetUniformLocation(simulation, "volumeSize"), simulationX, simulationY, simulationZ);
+				uniform(simulation, "dt", step); uniform(simulation, "time", time); uniform(simulation, "windSpeed", windSpeed);
+				uniform(simulation, "cloudBase", cloudBase); uniform(simulation, "cloudTop", cloudTop);
+				std::array<float, 32> positions{}, velocities{};
+				int meteorCount = 0;
+				for (const auto& meteor : meteors) {
+					if (meteorCount >= 8 || meteor.position.y < cloudBase - 120.0f || meteor.position.y > cloudTop + 120.0f ||
+						std::abs(meteor.position.x) > 2320.0f || std::abs(meteor.position.z) > 2320.0f) continue;
+					size_t offset = size_t(meteorCount) * 4;
+					positions[offset] = meteor.position.x; positions[offset + 1] = meteor.position.y;
+					positions[offset + 2] = meteor.position.z; positions[offset + 3] = 120.0f;
+					velocities[offset] = meteor.velocity.x; velocities[offset + 1] = meteor.velocity.y;
+					velocities[offset + 2] = meteor.velocity.z;
+					velocities[offset + 3] = std::min(300.0f, std::sqrt(dot(meteor.velocity, meteor.velocity)) * 0.3f);
+					++meteorCount;
+				}
+				glUniform1i(glGetUniformLocation(simulation, "meteorCount"), meteorCount);
+				if (meteorCount > 0) {
+					glUniform4fv(glGetUniformLocation(simulation, "meteorPositionRadius[0]"), meteorCount, positions.data());
+					glUniform4fv(glGetUniformLocation(simulation, "meteorVelocityStrength[0]"), meteorCount, velocities.data());
+				}
+				auto source = [&](int unit, const char* name, GLuint texture) {
+					glActiveTexture(GL_TEXTURE0 + unit); glBindTexture(GL_TEXTURE_3D, texture);
+					glUniform1i(glGetUniformLocation(simulation, name), unit);
+				};
+				auto run = [&](int pass, GLuint densityOut, GLuint velocityOut, GLuint scalarOut) {
+					glBindImageTexture(0, densityOut, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+					glBindImageTexture(1, velocityOut, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+					glBindImageTexture(2, scalarOut, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+					glUniform1i(glGetUniformLocation(simulation, "pass"), pass);
+					glDispatchCompute((simulationX + 3) / 4, (simulationY + 3) / 4, (simulationZ + 3) / 4);
+					glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+				};
+				source(0, "densityTexture", densityVolumes[size_t(densityIndex)]);
+				source(1, "velocityTexture", velocityVolumes[size_t(velocityIndex)]);
+				int nextVelocity = 1 - velocityIndex;
+				run(1, densityVolumes[size_t(1 - densityIndex)], velocityVolumes[size_t(nextVelocity)], divergenceVolume);
+				velocityIndex = nextVelocity;
+				source(1, "velocityTexture", velocityVolumes[size_t(velocityIndex)]);
+				run(2, densityVolumes[size_t(1 - densityIndex)], velocityVolumes[size_t(1 - velocityIndex)], divergenceVolume);
+				source(3, "divergenceTexture", divergenceVolume);
+				for (int iteration = 0; iteration < 10; ++iteration) {
+					source(2, "pressureTexture", pressureVolumes[size_t(pressureIndex)]);
+					int nextPressure = 1 - pressureIndex;
+					run(3, densityVolumes[size_t(1 - densityIndex)], velocityVolumes[size_t(1 - velocityIndex)], pressureVolumes[size_t(nextPressure)]);
+					pressureIndex = nextPressure;
+				}
+				source(2, "pressureTexture", pressureVolumes[size_t(pressureIndex)]);
+				int projectedVelocity = 1 - velocityIndex;
+				run(4, densityVolumes[size_t(1 - densityIndex)], velocityVolumes[size_t(projectedVelocity)], divergenceVolume);
+				velocityIndex = projectedVelocity;
+				source(0, "densityTexture", densityVolumes[size_t(densityIndex)]);
+				source(1, "velocityTexture", velocityVolumes[size_t(velocityIndex)]);
+				int nextDensity = 1 - densityIndex;
+				run(5, densityVolumes[size_t(nextDensity)], velocityVolumes[size_t(1 - velocityIndex)], divergenceVolume);
+				densityIndex = nextDensity;
+			}
+			glActiveTexture(GL_TEXTURE0);
 		}
 		void beginScene(int w, int h) {
 			if (w != width || h != height) {
@@ -965,7 +1100,8 @@ namespace {
 		void endEmission() {
 			glDrawBuffer(GL_COLOR_ATTACHMENT0);
 		}
-		void draw(Vec3 eye, Vec3 forward, Vec3 right, Vec3 up, Vec3 sun, Vec3 fog, float daylight, float opacity, float time, float coverage, float distance, GLuint destination) {
+		void draw(Vec3 eye, Vec3 forward, Vec3 right, Vec3 up, Vec3 sun, Vec3 fog, float daylight, float atmosphereOpacity,
+			float cloudOpacity, float time, float coverage, float windSpeed, float cloudBase, float cloudTop, float distance, GLuint destination) {
 			glBindFramebuffer(GL_FRAMEBUFFER, cloudFbo); glViewport(0, 0, (width + 1) / 2, (height + 1) / 2);
 			glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_CULL_FACE); glDisable(GL_BLEND);
 			glUseProgram(shader); glBindVertexArray(vao);
@@ -973,9 +1109,13 @@ namespace {
 			glUniform1i(glGetUniformLocation(shader, "sceneDepth"), 0);
 			glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_3D, noiseTexture);
 			glUniform1i(glGetUniformLocation(shader, "noiseTexture"), 1);
+			glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_3D, densityTexture());
+			glUniform1i(glGetUniformLocation(shader, "cloudDensityTexture"), 2);
 			uniform(shader, "eye", eye); uniform(shader, "cameraForward", forward); uniform(shader, "cameraRight", right); uniform(shader, "cameraUp", up);
 			uniform(shader, "sunDirection", sun); uniform(shader, "fogColor", fog); uniform(shader, "daylight", daylight);
-			uniform(shader, "atmosphereOpacity", opacity); uniform(shader, "time", time); uniform(shader, "cloudCoverage", coverage);
+			uniform(shader, "atmosphereOpacity", atmosphereOpacity); uniform(shader, "cloudOpacity", cloudOpacity);
+			uniform(shader, "time", time); uniform(shader, "cloudCoverage", coverage);
+			uniform(shader, "windSpeed", windSpeed); uniform(shader, "cloudBase", cloudBase); uniform(shader, "cloudTop", cloudTop);
 			uniform(shader, "aspect", float(width) / height); uniform(shader, "tanHalfFov", std::tan(pi / 8));
 			Mat4 projection = perspective(float(width) / height, distance);
 			glUniform2f(glGetUniformLocation(shader, "depthProjection"), projection[10], projection[14]);
@@ -1137,7 +1277,7 @@ namespace {
 			}
 			width = w; height = h; glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		}
-		void draw(GLuint scene, bool enabled, float exposure, float bloomIntensity) {
+		void draw(GLuint scene, bool enabled, float exposure, float bloomIntensity, int outputWidth, int outputHeight) {
 			glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_CULL_FACE);
 			glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST); glDisable(GL_FRAMEBUFFER_SRGB);
 			glBindVertexArray(vao); glActiveTexture(GL_TEXTURE0);
@@ -1157,7 +1297,7 @@ namespace {
 				glDrawArrays(GL_TRIANGLES, 0, 3);
 			}
 			glDisable(GL_BLEND);
-			glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, width, height); glUseProgram(composite);
+			glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, outputWidth, outputHeight); glUseProgram(composite);
 			glBindTexture(GL_TEXTURE_2D, scene); glUniform1i(glGetUniformLocation(composite, "scene"), 0);
 			glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, colors[0]);
 			glUniform1i(glGetUniformLocation(composite, "bloom"), 1);
@@ -1187,7 +1327,7 @@ namespace {
 		startupDiagnostic("Initializing particle simulation"); Volcanoes volcanoes(directory, terrain);
 		startupDiagnostic("Initializing lightning"); Lightning lightning(directory);
 		startupDiagnostic("Initializing UI renderer"); UiRenderer ui(directory);
-		startupDiagnostic("Initializing clouds"); Clouds clouds(directory);
+		startupDiagnostic("Initializing clouds"); Clouds clouds(directory, volcanoes.gpu.terrainTexture);
 		startupDiagnostic("Initializing rain"); Rain rain(directory);
 		startupDiagnostic("Initializing terrain shadows"); TerrainShadows shadows(directory);
 		startupDiagnostic("Initializing SSGI"); ScreenSpaceGI screenSpaceGI(directory);
@@ -1198,9 +1338,15 @@ namespace {
 		float atmosphereOpacity = 0.4f;
 		float waterLevel = 25.f;
 		float cloudCoverage = 0.5f;
+		float cloudOpacity = 0.4f;
+		float windSpeed = 10.0f;
+		float cloudBase = 290.0f;
+		constexpr float cloudThickness = 240.0f;
 		float cameraExposure = 0.0f;
 		float bloomIntensity = 0.15f;
 		bool cloudsEnabled = true;
+		bool cloudSimulationEnabled = true;
+		bool particleSimulationEnabled = true;
 		bool bloomEnabled = true;
 		bool ssgiEnabled = false;
 		float timeSpeed = 1.0f;
@@ -1220,10 +1366,20 @@ namespace {
 			double elapsed = std::clamp(now - previous, 0.0, 0.1) * double(timeSpeed);
 			previous = now;
 			simulationTime += elapsed;
-			volcanoes.update(terrain, elapsed, waterLevel);
-			lightning.update(terrain, elapsed);
-			int w = 0, h = 0; glfwGetFramebufferSize(window, &w, &h);
-			if (w <= 0 || h <= 0) { glfwWaitEventsTimeout(0.05); continue; }
+			float cloudTop = cloudBase + cloudThickness;
+			if (particleSimulationEnabled) volcanoes.update(terrain, elapsed, waterLevel, windSpeed);
+			lightning.update(terrain, elapsed, cloudBase, cloudTop);
+			static const std::vector<Volcanoes::Meteor> noMovingMeteors;
+			if (cloudSimulationEnabled) clouds.update(elapsed, float(simulationTime),
+				particleSimulationEnabled ? volcanoes.meteors : noMovingMeteors,
+				volcanoes.gpu.buffers[0], particleSimulationEnabled, windSpeed, cloudBase, cloudTop);
+			int framebufferWidth = 0, framebufferHeight = 0;
+			glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+			if (framebufferWidth <= 0 || framebufferHeight <= 0) { glfwWaitEventsTimeout(0.05); continue; }
+			// Keep UI at native resolution while rendering the HDR scene at half width
+			// and height. The final tone-map pass performs the upscale.
+			int w = std::max(1, (framebufferWidth + 1) / 2);
+			int h = std::max(1, (framebufferHeight + 1) / 2);
 			ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
 			auto& io = ImGui::GetIO();
 			if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
@@ -1270,8 +1426,9 @@ namespace {
 			fog = fog * (1 - sunset) + Vec3{ 0.70f,0.23f,0.09f }*sunset;
 			Mat4 projection = perspective(float(w) / float(h), distance);
 			Mat4 vp = multiply(projection, lookAt(eye, forward, right, up));
-			rain.update(elapsed, cloudsEnabled, cloudCoverage, eye, waterLevel, float(simulationTime), volcanoes.gpu.terrainTexture,
-				clouds.noiseTexture, volcanoes.gpu.buffers[0], volcanoes.gpu.buffers[4], volcanoes.gpu.buffers[5]);
+			if (particleSimulationEnabled)
+				rain.update(elapsed, cloudsEnabled, cloudCoverage, eye, waterLevel, float(simulationTime), windSpeed, cloudBase, cloudTop, volcanoes.gpu.terrainTexture,
+					clouds.densityTexture(), volcanoes.gpu.buffers[0], volcanoes.gpu.buffers[4], volcanoes.gpu.buffers[5]);
 
 			shadows.render(terrain, sun);
 			reflection.begin(w, h);
@@ -1369,7 +1526,7 @@ namespace {
 			}
 			glUseProgram(programs.water);
 			glUniformMatrix4fv(glGetUniformLocation(programs.water, "viewProjection"), 1, GL_FALSE, vp.data());
-			uniform(programs.water, "eye", eye); uniform(programs.water, "sunDirection", sun);
+			uniform(programs.water, "eye", eye); uniform(programs.water, "sunDirection", sun); uniform(programs.water, "fogColor", fog);
 			uniform(programs.water, "daylight", daylight); uniform(programs.water, "atmosphereOpacity", atmosphereOpacity);
 			uniform(programs.water, "waterLevel", waterLevel);
 			uniform(programs.water, "time", float(simulationTime));
@@ -1383,7 +1540,6 @@ namespace {
 			glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 			glDrawArrays(GL_TRIANGLES, 0, 6);
 			glDepthMask(GL_TRUE); glDisable(GL_BLEND);
-			constexpr float cloudBase = 290.0f;
 			bool vaporAfterClouds = cloudsEnabled && eye.y < cloudBase;
 			if (!vaporAfterClouds) rain.draw(vp, eye, right, up, daylight);
 			if (ssgiEnabled) clouds.beginEmission();
@@ -1394,7 +1550,8 @@ namespace {
 				screenSpaceGI.draw(clouds.sceneFbo, clouds.sceneDepth, clouds.sceneEmission, w, h, eye, forward, right, up, distance);
 			}
 			if (cloudsEnabled) {
-				clouds.draw(eye, forward, right, up, sun, fog, daylight, atmosphereOpacity, float(simulationTime), cloudCoverage, distance, bloom.hdrFbo);
+				clouds.draw(eye, forward, right, up, sun, fog, daylight, atmosphereOpacity, cloudOpacity,
+					float(simulationTime), cloudCoverage, windSpeed, cloudBase, cloudTop, distance, bloom.hdrFbo);
 				glBindFramebuffer(GL_FRAMEBUFFER, bloom.hdrFbo);
 				glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, clouds.sceneDepth, 0);
 				glDrawBuffer(GL_COLOR_ATTACHMENT0); glViewport(0, 0, w, h);
@@ -1407,13 +1564,14 @@ namespace {
 			}
 			else lightning.draw(vp, eye, right);
 			bloom.draw(cloudsEnabled ? bloom.hdrColor : clouds.sceneColor, bloomEnabled,
-				std::pow(2.0f, cameraExposure), bloomIntensity);
+				std::pow(2.0f, cameraExposure), bloomIntensity, framebufferWidth, framebufferHeight);
 
 			ImGui::SetNextWindowPos(ImVec2(20 * uiScale, 20 * uiScale), ImGuiCond_Always);
 			ImGui::SetNextWindowBgAlpha(0.78f);
 			ImGui::Begin("EarthSim", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
 			ImGui::TextColored(ImVec4(0.65f, 0.86f, 0.76f, 1), "E A R T H S I M");
 			ImGui::TextUnformatted("Procedural mountain range"); ImGui::Spacing();
+			ImGui::Text("FPS: %.1f", io.Framerate);
 			float timeOfDayHours = day * 24.0f;
 			ImGui::SetNextItemWidth(180 * uiScale);
 			if (ImGui::SliderFloat("Time of day", &timeOfDayHours, 0.0f, 23.999f, "%.2f h", ImGuiSliderFlags_AlwaysClamp))
@@ -1467,6 +1625,7 @@ namespace {
 			ImGui::DragFloat("Particle life", &volcanoes.particleLifetime, 1.f, 1.0f, 3600.0f, "%.1f s");
 			ImGui::SetNextItemWidth(180 * uiScale);
 			ImGui::SliderFloat("Particle brightness", &volcanoes.particleBrightness, 0.0f, 100.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::Checkbox("Particle simulation", &particleSimulationEnabled);
 			ImGui::Checkbox("Particle interactions", &volcanoes.particleInteractions);
 			ImGui::SetNextItemWidth(180 * uiScale);
 			ImGui::SliderFloat("Atmosphere opacity", &atmosphereOpacity, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -1477,8 +1636,16 @@ namespace {
 			ImGui::SetNextItemWidth(180 * uiScale);
 			ImGui::DragFloat("Rain intensity", &rain.intensity, 1.f, 0.0f, 10.0f, "%.2f");
 			ImGui::Checkbox("Clouds", &cloudsEnabled);
+			ImGui::Checkbox("Cloud simulation", &cloudSimulationEnabled);
+			if (ImGui::Button("Clear clouds")) clouds.clearDensity();
 			ImGui::SetNextItemWidth(180 * uiScale);
 			ImGui::SliderFloat("Cloud coverage", &cloudCoverage, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(180 * uiScale);
+			ImGui::SliderFloat("Cloud opacity", &cloudOpacity, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(180 * uiScale);
+			ImGui::SliderFloat("Wind speed", &windSpeed, 0.0f, 500.0f, "%.1f units/s", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SetNextItemWidth(180 * uiScale);
+			ImGui::SliderFloat("Cloud height", &cloudBase, 0.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
 			ImGui::Checkbox("Bloom", &bloomEnabled);
 			//ImGui::Checkbox("SSGI", &ssgiEnabled);
 			ImGui::Separator();
@@ -1489,7 +1656,7 @@ namespace {
 			ImGui::Begin("EarthSim quit", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
 				ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
 			if (ImGui::Button("Quit", ImVec2(72.0f * uiScale, 0.0f))) glfwSetWindowShouldClose(window, GLFW_TRUE);
-			ImGui::End(); ImGui::Render(); ui.draw(ImGui::GetDrawData(), w, h);
+			ImGui::End(); ImGui::Render(); ui.draw(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
 			glfwSwapBuffers(window);
 		}
 	}
@@ -1497,7 +1664,6 @@ namespace {
 
 int main(int argc, char** argv) {
 	(void)argc;
-	startupLog.open("EarthSim-startup.log", std::ios::out | std::ios::trunc);
 	startupDiagnostic("Starting EarthSim");
 	glfwSetErrorCallback([](int code, const char* description) {std::cerr << "GLFW " << code << ": " << description << '\n'; });
 	if (!glfwInit()) return 1;
@@ -1518,7 +1684,16 @@ int main(int argc, char** argv) {
 	GLFWwindow* window = glfwCreateWindow(initialWidth, initialHeight, "EarthSim", videoMode ? monitor : nullptr, nullptr);
 	if (!window) { glfwTerminate(); return 1; }
 	glfwMakeContextCurrent(window); glfwSwapInterval(1);
-	if (!gladLoadGL(glfwGetProcAddress) || !GLAD_GL_VERSION_3_3) {
+	glewExperimental = GL_TRUE;
+	GLenum glewResult = glewInit();
+	// GLEW may generate GL_INVALID_ENUM while probing a core-profile context.
+	glGetError();
+	if (glewResult != GLEW_OK) {
+		std::cerr << "Failed to initialize GLEW: "
+			<< reinterpret_cast<const char*>(glewGetErrorString(glewResult)) << '\n';
+		glfwDestroyWindow(window); glfwTerminate(); return 1;
+	}
+	if (!GLEW_VERSION_4_3) {
 		std::cerr << "EarthSim requires OpenGL 4.3.\n"; glfwDestroyWindow(window); glfwTerminate(); return 1;
 	}
 	const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
@@ -1526,11 +1701,6 @@ int main(int argc, char** argv) {
 	const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
 	startupDiagnostic(std::string("OpenGL: ") + (version ? version : "unknown") + ", renderer: "
 		+ (renderer ? renderer : "unknown") + ", vendor: " + (vendor ? vendor : "unknown"));
-	dispatchCompute = reinterpret_cast<DispatchComputeProc>(glfwGetProcAddress("glDispatchCompute"));
-	memoryBarrier = reinterpret_cast<MemoryBarrierProc>(glfwGetProcAddress("glMemoryBarrier"));
-	if (!dispatchCompute || !memoryBarrier) {
-		std::cerr << "EarthSim requires OpenGL 4.3 compute shaders.\n"; glfwDestroyWindow(window); glfwTerminate(); return 1;
-	}
 	IMGUI_CHECKVERSION(); ImGui::CreateContext(); ImGui::GetIO().IniFilename = nullptr;
 	ImGui::StyleColorsDark();
 	auto& style = ImGui::GetStyle(); style.WindowRounding = 10; style.WindowPadding = ImVec2(18, 16); style.ItemSpacing = ImVec2(8, 8);

@@ -1,0 +1,162 @@
+#version 430 core
+layout(local_size_x=4,local_size_y=4,local_size_z=4) in;
+layout(r16f,binding=0) uniform image3D densityImage;
+layout(rgba16f,binding=1) uniform image3D velocityImage;
+layout(r16f,binding=2) uniform image3D scalarImage;
+layout(std430,binding=0) readonly buffer CloudMoisture { uint moisture[]; };
+uniform sampler3D densityTexture;
+uniform sampler3D velocityTexture;
+uniform sampler3D pressureTexture;
+uniform sampler3D divergenceTexture;
+uniform sampler2D terrainHeight;
+uniform ivec3 volumeSize;
+uniform int pass;
+uniform float dt;
+uniform float time;
+uniform float windSpeed;
+uniform float cloudBase;
+uniform float cloudTop;
+uniform int meteorCount;
+uniform vec4 meteorPositionRadius[8];
+uniform vec4 meteorVelocityStrength[8];
+vec3 boxMin() { return vec3(-2200.0,cloudBase,-2200.0); }
+vec3 boxMax() { return vec3(2200.0,cloudTop,2200.0); }
+
+uint hash3(uvec3 p) {
+    uint h=p.x*0x8da6b343u^p.y*0xd8163841u^p.z*0xcb1ab31fu;
+    h^=h>>16u; h*=0x7feb352du; h^=h>>15u; h*=0x846ca68bu; return h^(h>>16u);
+}
+float randomCell(ivec3 p) { return float(hash3(uvec3(p))>>8u)*(1.0/16777216.0); }
+float valueNoise(vec3 p) {
+    ivec3 cell=ivec3(floor(p)); vec3 f=fract(p); f=f*f*(3.0-2.0*f);
+    float c000=randomCell(cell),c100=randomCell(cell+ivec3(1,0,0));
+    float c010=randomCell(cell+ivec3(0,1,0)),c110=randomCell(cell+ivec3(1,1,0));
+    float c001=randomCell(cell+ivec3(0,0,1)),c101=randomCell(cell+ivec3(1,0,1));
+    float c011=randomCell(cell+ivec3(0,1,1)),c111=randomCell(cell+ivec3(1,1,1));
+    return mix(mix(mix(c000,c100,f.x),mix(c010,c110,f.x),f.y),
+        mix(mix(c001,c101,f.x),mix(c011,c111,f.x),f.y),f.z);
+}
+float initialDensity(vec3 world) {
+    vec3 q=world*0.007;
+    return 0.60*valueNoise(q)+0.28*valueNoise(q*2.03+17.0)+0.12*valueNoise(q*4.11+31.0);
+}
+vec3 uvFor(ivec3 p) { return (vec3(p)+0.5)/vec3(volumeSize); }
+vec3 worldFor(ivec3 p) { return mix(boxMin(),boxMax(),uvFor(p)); }
+vec3 wrapUv(vec3 uv) { return vec3(fract(uv.x),clamp(uv.y,0.001,0.999),fract(uv.z)); }
+float terrainSurface(vec3 world) {
+    if(any(greaterThan(abs(world.xz),vec2(1000.0)))) return -1e20;
+    return textureLod(terrainHeight,world.xz/2000.0+0.5,0.0).r;
+}
+
+void main() {
+    ivec3 p=ivec3(gl_GlobalInvocationID.xyz);
+    if(any(greaterThanEqual(p,volumeSize))) return;
+    vec3 uv=uvFor(p),world=worldFor(p);
+    if(pass==0) {
+        float density=world.y<=terrainSurface(world)?0.0:initialDensity(world);
+        imageStore(densityImage,p,vec4(density));
+        vec2 wind=normalize(vec2(0.85,0.35))*windSpeed;
+        imageStore(velocityImage,p,vec4(wind.x,0.0,wind.y,0.0));
+        imageStore(scalarImage,p,vec4(0.0));
+        return;
+    }
+    if(pass==6) { imageStore(scalarImage,p,vec4(0.0)); return; }
+    if(pass==7) { imageStore(densityImage,p,vec4(0.0)); return; }
+    vec3 texel=1.0/vec3(volumeSize);
+    if(pass==1) {
+        vec3 oldVelocity=texture(velocityTexture,uv).xyz;
+        vec3 previousUv=wrapUv(uv-oldVelocity*dt/(boxMax()-boxMin()));
+        vec3 velocity=texture(velocityTexture,previousUv).xyz;
+        float density=texture(densityTexture,uv).r;
+        vec2 horizontalWind=normalize(vec2(0.85,0.35))*windSpeed;
+        vec3 targetWind=vec3(horizontalWind.x,0.0,horizontalWind.y);
+        velocity=mix(velocity,targetWind,1.0-exp(-0.16*dt));
+        vec3 turbulence=vec3(sin(world.z*0.018+time*0.73)+cos(world.y*0.041-time*0.51),
+            sin(world.x*0.015+world.z*0.011+time*0.39),
+            cos(world.x*0.017-time*0.61)-sin(world.y*0.037+time*0.47));
+        velocity+=turbulence*(0.42*dt);
+        velocity.y+=(density-0.5)*0.32*dt;
+        for(int i=0;i<meteorCount;++i) {
+            vec3 relative=world-meteorPositionRadius[i].xyz;
+            float radius=meteorPositionRadius[i].w;
+            vec3 axis=normalize(meteorVelocityStrength[i].xyz);
+            vec3 radial=relative-axis*dot(relative,axis);
+            float radialLength=length(radial);
+            vec3 direction=radialLength>0.01?radial/radialLength:normalize(relative+vec3(0.01,0.0,0.0));
+            float along=abs(dot(relative,axis));
+            float impulse=exp(-3.0*radialLength*radialLength/(radius*radius))
+                *exp(-along*along/(radius*radius))*meteorVelocityStrength[i].w;
+            velocity+=direction*(impulse*dt);
+        }
+        if(p.y==0||p.y==volumeSize.y-1) velocity.y=0.0;
+        imageStore(velocityImage,p,vec4(clamp(velocity,vec3(-600.0),vec3(600.0)),0.0));
+    } else if(pass==2) {
+        vec3 left=texture(velocityTexture,wrapUv(uv-vec3(texel.x,0,0))).xyz;
+        vec3 right=texture(velocityTexture,wrapUv(uv+vec3(texel.x,0,0))).xyz;
+        vec3 down=texture(velocityTexture,wrapUv(uv-vec3(0,texel.y,0))).xyz;
+        vec3 up=texture(velocityTexture,wrapUv(uv+vec3(0,texel.y,0))).xyz;
+        vec3 back=texture(velocityTexture,wrapUv(uv-vec3(0,0,texel.z))).xyz;
+        vec3 front=texture(velocityTexture,wrapUv(uv+vec3(0,0,texel.z))).xyz;
+        vec3 inverseCell=vec3(volumeSize)/(boxMax()-boxMin());
+        float divergence=0.5*((right.x-left.x)*inverseCell.x+(up.y-down.y)*inverseCell.y+(front.z-back.z)*inverseCell.z);
+        imageStore(scalarImage,p,vec4(divergence));
+    } else if(pass==3) {
+        float left=texture(pressureTexture,wrapUv(uv-vec3(texel.x,0,0))).r;
+        float right=texture(pressureTexture,wrapUv(uv+vec3(texel.x,0,0))).r;
+        float down=texture(pressureTexture,wrapUv(uv-vec3(0,texel.y,0))).r;
+        float up=texture(pressureTexture,wrapUv(uv+vec3(0,texel.y,0))).r;
+        float back=texture(pressureTexture,wrapUv(uv-vec3(0,0,texel.z))).r;
+        float front=texture(pressureTexture,wrapUv(uv+vec3(0,0,texel.z))).r;
+        float divergence=texture(divergenceTexture,uv).r;
+        imageStore(scalarImage,p,vec4((left+right+down+up+back+front-divergence*0.35)/6.0));
+    } else if(pass==4) {
+        float left=texture(pressureTexture,wrapUv(uv-vec3(texel.x,0,0))).r;
+        float right=texture(pressureTexture,wrapUv(uv+vec3(texel.x,0,0))).r;
+        float down=texture(pressureTexture,wrapUv(uv-vec3(0,texel.y,0))).r;
+        float up=texture(pressureTexture,wrapUv(uv+vec3(0,texel.y,0))).r;
+        float back=texture(pressureTexture,wrapUv(uv-vec3(0,0,texel.z))).r;
+        float front=texture(pressureTexture,wrapUv(uv+vec3(0,0,texel.z))).r;
+        vec3 velocity=texture(velocityTexture,uv).xyz;
+        vec3 inverseCell=vec3(volumeSize)/(boxMax()-boxMin());
+        velocity-=0.5*vec3(right-left,up-down,front-back)*inverseCell;
+        // A pressure projection deliberately removes divergence, which would also
+        // erase most of an explosive shock. Reapply the meteor impulse afterward.
+        for(int i=0;i<meteorCount;++i) {
+            vec3 relative=world-meteorPositionRadius[i].xyz;
+            float radius=meteorPositionRadius[i].w;
+            vec3 axis=normalize(meteorVelocityStrength[i].xyz);
+            vec3 radial=relative-axis*dot(relative,axis);
+            float radialLength=length(radial);
+            vec3 direction=radialLength>0.01?radial/radialLength:normalize(relative+vec3(0.01,0.0,0.0));
+            float along=abs(dot(relative,axis));
+            float impulse=exp(-2.2*radialLength*radialLength/(radius*radius))
+                *exp(-0.7*along*along/(radius*radius))*meteorVelocityStrength[i].w;
+            velocity+=direction*(impulse*dt*2.6);
+        }
+        imageStore(velocityImage,p,vec4(clamp(velocity,vec3(-600.0),vec3(600.0)),0.0));
+    } else if(pass==5) {
+        vec3 velocity=texture(velocityTexture,uv).xyz;
+        vec3 previousUv=wrapUv(uv-velocity*dt/(boxMax()-boxMin()));
+        float density=texture(densityTexture,previousUv).r;
+        uint linearIndex=uint((p.z*volumeSize.y+p.y)*volumeSize.x+p.x);
+        density+=float(moisture[linearIndex])*(1.0/65535.0);
+        // Explicitly move material out of the fast projectile's under-resolved
+        // core and accumulate some of it in a surrounding compression ring.
+        for(int i=0;i<meteorCount;++i) {
+            vec3 relative=world-meteorPositionRadius[i].xyz;
+            float radius=meteorPositionRadius[i].w;
+            vec3 axis=normalize(meteorVelocityStrength[i].xyz);
+            float radialDistance=length(relative-axis*dot(relative,axis));
+            float along=abs(dot(relative,axis));
+            float longitudinal=exp(-0.8*along*along/(radius*radius));
+            float core=exp(-8.0*radialDistance*radialDistance/(radius*radius))*longitudinal;
+            float normalizedRadius=radialDistance/radius;
+            float rim=exp(-55.0*(normalizedRadius-0.72)*(normalizedRadius-0.72))*longitudinal;
+            density=density*(1.0-0.23*core)+0.05*rim;
+        }
+        float equilibrium=initialDensity(world);
+        density=mix(density,equilibrium,1.0-exp(-dt/900.0));
+        if(world.y<=terrainSurface(world)) density=0.0;
+        imageStore(densityImage,p,vec4(clamp(density,0.0,1.0)));
+    }
+}
