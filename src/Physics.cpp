@@ -491,6 +491,14 @@ void Volcanoes::set_erosion_speed(float speed) {
     erosion_speed_ = std::max(0.0f, speed);
 }
 
+bool Volcanoes::erosion_simulation_enabled() const {
+    return erosion_simulation_enabled_;
+}
+
+void Volcanoes::set_erosion_simulation_enabled(bool enabled) {
+    erosion_simulation_enabled_ = enabled;
+}
+
 bool Volcanoes::particle_interactions() const {
     return particle_interactions_;
 }
@@ -743,7 +751,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
         gpu_.spawn(spawned);
         gpu_.step(dt,
             particle_interactions_,
-            erosion_speed_,
+            erosion_simulation_enabled_ ? erosion_speed_ : 0.0f,
             particle_lifetime_,
             water_level,
             wind_speed,
@@ -751,7 +759,8 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
             tornado_movements,
             tornadoes_.size());
     }
-    if (erosion_readback_accumulator_ >= 0.1 && gpu_.schedule_erosion_readback())
+    if (erosion_simulation_enabled_ && erosion_readback_accumulator_ >= 0.1 &&
+        gpu_.schedule_erosion_readback())
         erosion_readback_accumulator_ = std::fmod(erosion_readback_accumulator_, 0.1);
 }
 

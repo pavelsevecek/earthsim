@@ -61,8 +61,9 @@ void main() {
     bool pendingDeposit=(flags&256u)!=0u;
     bool pendingLava=(flags&512u)!=0u;
     if(pendingDeposit) {
-        exchangeTerrain(particles[id].positionAge.xz,
-            sedimentState[id].x+(pendingLava?materialVolume:0.0));
+        if(erosionSpeed>0.0)
+            exchangeTerrain(particles[id].positionAge.xz,
+                sedimentState[id].x+(pendingLava?materialVolume:0.0));
         sedimentState[id]=vec4(0.0);
         if((flags&32u)!=0u)
             particles[id].data.z=float(flags&~(256u|512u));
@@ -70,6 +71,8 @@ void main() {
             particles[id].data.w=0.0;
         return;
     }
+
+    if(erosionSpeed<=0.0) return;
 
     // Newly emitted particles need time to leave their tightly concentrated
     // source region before they are allowed to cut the terrain.

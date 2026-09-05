@@ -652,8 +652,8 @@ void AppState::frame() {
         placement_miss_ = false;
         panning_ = false;
     }
-   
-    ImGui::SameLine();
+
+
     if (ImGui::Button("Terrain up")) {
         placement_ = PlacementTool::TerrainUp;
         placement_miss_ = false;
@@ -665,6 +665,8 @@ void AppState::frame() {
         placement_miss_ = false;
         panning_ = false;
     }
+    ImGui::SameLine();
+
     if (ImGui::Button("Add water")) {
         placement_ = PlacementTool::AddWater;
         placement_miss_ = false;
@@ -737,6 +739,9 @@ void AppState::frame() {
             "%.2fx",
             ImGuiSliderFlags_AlwaysClamp))
         volcanoes_.set_particle_brightness(particle_brightness);
+    bool erosion_simulation_enabled = volcanoes_.erosion_simulation_enabled();
+    if (ImGui::Checkbox("Erosion simulation", &erosion_simulation_enabled))
+        volcanoes_.set_erosion_simulation_enabled(erosion_simulation_enabled);
     ImGui::SetNextItemWidth(180 * ui_scale);
     float erosion_speed = volcanoes_.erosion_speed();
     if (ImGui::DragFloat("Erosion speed", &erosion_speed, 1.f, 0.0f, 1000.0f, "%.2fx"))

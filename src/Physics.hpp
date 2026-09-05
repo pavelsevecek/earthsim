@@ -93,6 +93,7 @@ private:
     float particle_lifetime_ = 33.0f;
     float particle_brightness_ = 1.0f;
     float erosion_speed_ = 50.0f;
+    bool erosion_simulation_enabled_ = true;
     bool particle_interactions_ = true;
     float range(float low, float high);
     void add_surface_particles(
@@ -125,6 +126,8 @@ public:
     void set_particle_brightness(float brightness);
     float erosion_speed() const;
     void set_erosion_speed(float speed);
+    bool erosion_simulation_enabled() const;
+    void set_erosion_simulation_enabled(bool enabled);
     bool particle_interactions() const;
     void set_particle_interactions(bool enabled);
     void add_water(const Terrain& terrain, Vec3 center, float radius, float spacing);
