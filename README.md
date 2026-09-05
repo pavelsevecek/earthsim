@@ -25,3 +25,6 @@ cmake --build build
 ```
 
 CMake uses the bundled GLFW, GLEW, and Dear ImGui dependencies and copies the `shaders` directory beside the executable.
+
+<img width="2880" height="1704" alt="Screenshot 2026-09-05 051925" src="https://github.com/user-attachments/assets/0b48c92f-be99-49ba-9cef-bc1bc0fcad9e" />
+<img width="2880" height="1800" alt="Screenshot 2026-09-05 200550" src="https://github.com/user-attachments/assets/e2a95484-1be3-4e95-8a39-b97b57a24f1e" />
