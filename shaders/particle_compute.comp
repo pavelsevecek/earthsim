@@ -15,6 +15,9 @@ uniform bool interactions;
 uniform float particleLifetime;
 uniform float waterLevel;
 uniform float windSpeed;
+uniform int tornadoCount;
+uniform vec4 tornadoCenterId[8];
+uniform vec4 tornadoMovementHeight[8];
 const float support=4.0;
 const float restDensity=1.0/(1.5*1.5*1.5);
 const uint bucketCount=32768u;
@@ -65,12 +68,46 @@ void main() {
     if(pass==1) {
         particles[id].positionAge.w+=dt;
         uint flags=uint(particles[id].data.z);
-        float life=(flags&8u)!=0u?particles[id].velocityLife.w:particleLifetime;
+        float life=(flags&(8u|64u))!=0u?particles[id].velocityLife.w:particleLifetime;
         if(particles[id].positionAge.w>=life || any(greaterThan(abs(particles[id].positionAge.xz),vec2(999.0)))) { particles[id].data.w=0; return; }
-        particles[id].data.y=300.0+(particles[id].data.y-300.0)*exp(-dt/(50.0*particles[id].data.x/1.7));
         previous[id]=vec4(particles[id].positionAge.xyz,0);
+        if((flags&64u)!=0u) {
+            int tornado=-1;
+            for(int i=0;i<tornadoCount;++i)
+                if(abs(particles[id].data.y-tornadoCenterId[i].w)<0.25) { tornado=i; break; }
+            if(tornado<0) { particles[id].data.w=0.0; return; }
+            vec3 oldCenter=tornadoCenterId[tornado].xyz-tornadoMovementHeight[tornado].xyz;
+            vec3 relative=particles[id].positionAge.xyz-oldCenter;
+            float turn=1.8*dt;
+            relative.xz=mat2(cos(turn),-sin(turn),sin(turn),cos(turn))*relative.xz;
+            particles[id].positionAge.xyz=tornadoCenterId[tornado].xyz+relative;
+            return;
+        }
+        particles[id].data.y=300.0+(particles[id].data.y-300.0)*exp(-dt/(50.0*particles[id].data.x/1.7));
+        for(int i=0;i<tornadoCount;++i) {
+            vec3 relative=particles[id].positionAge.xyz-tornadoCenterId[i].xyz;
+            float funnelHeight=tornadoMovementHeight[i].w;
+            float influenceRadius=10.0+clamp(relative.y,0.0,funnelHeight)*0.2;
+            if(relative.y>=-4.0 && relative.y<funnelHeight && length(relative.xz)<influenceRadius &&
+                (flags&(1u|16u))!=0u && (flags&(8u|32u))==0u) {
+                float radius=max(length(relative.xz),1.0);
+                vec2 radial=relative.xz/radius;
+                // The funnel rotation above is clockwise in XZ (GLSL matrices are column-major).
+                vec2 tangent=vec2(radial.y,-radial.x);
+                vec3 targetVelocity=vec3(tornadoMovementHeight[i].x/dt,0.0,tornadoMovementHeight[i].z/dt);
+                targetVelocity.xz+=tangent*(32.0+0.18*relative.y)-radial*8.0;
+                targetVelocity.y=22.0;
+                particles[id].velocityLife.xyz=mix(particles[id].velocityLife.xyz,targetVelocity,1.0-exp(-8.0*dt));
+                break;
+            }
+        }
         if((flags&32u)!=0u) {
-            particles[id].velocityLife.y=6.0;
+            if((flags&128u)==0u)
+                particles[id].velocityLife.y=6.0;
+            else {
+                particles[id].velocityLife.y+=1.5*dt;
+                particles[id].velocityLife.xyz*=exp(-0.18*dt);
+            }
             float windStrength=smoothstep(20.0,260.0,particles[id].positionAge.y);
             vec2 windDirection=normalize(vec2(0.85+0.3*sin(particles[id].positionAge.z*0.012),
                 0.35+0.3*cos(particles[id].positionAge.x*0.01)));
@@ -120,7 +157,7 @@ void main() {
         particles[id].positionAge.xyz+=scratch[id].xyz;
         if((uint(particles[id].data.z)&4u)!=0u) projectTerrain(particles[id].positionAge.xyz,max(0.65,particles[id].data.x*0.52));
     } else if(pass==6) {
-        previous[id]=vec4((uint(particles[id].data.z)&32u)!=0u?particles[id].velocityLife.xyz:
+        previous[id]=vec4((uint(particles[id].data.z)&(32u|64u))!=0u?particles[id].velocityLife.xyz:
             (particles[id].positionAge.xyz-previous[id].xyz)/dt,0);
     } else if(pass==7) {
         vec3 velocity=previous[id].xyz;

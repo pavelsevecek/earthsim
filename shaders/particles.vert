@@ -43,7 +43,8 @@ void main() {
         Particle particle=particles[gl_InstanceID];
         bool trail=(uint(particle.data.z)&8u)!=0u;
         bool water=(uint(particle.data.z)&16u)!=0u;
-        bool vapor=(uint(particle.data.z)&32u)!=0u;
+        bool vapor=(uint(particle.data.z)&(32u|64u))!=0u;
+        bool tornado=(uint(particle.data.z)&64u)!=0u;
         bool selected=renderMode==0?(!trail&&!water&&!vapor):(renderMode==1?trail:(renderMode==2?water:vapor));
         if(particle.data.w<0.5 || !selected) {
             opacity=0.0;
@@ -51,7 +52,7 @@ void main() {
             return;
         }
         center=particle.positionAge.xyz;
-        float life=trail?particle.velocityLife.w:particleLifetime;
+        float life=(trail||tornado)?particle.velocityLife.w:particleLifetime;
         float normalizedAge=clamp(particle.positionAge.w/max(life,0.001),0.0,1.0);
         float sizeScale=trail?(1.0+2.0*normalizedAge):(vapor?(1.0+min(particle.positionAge.w*0.08,2.0)):1.0);
         size=particle.data.x*sizeScale;

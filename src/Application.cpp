@@ -40,15 +40,27 @@ class AppState {
     bool ssgi_enabled_ = false;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
+    bool day_night_paused_ = false;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
-    enum class PlacementTool { None, Volcano, Spring, Meteor, TerrainUp, TerrainDown };
+    enum class PlacementTool {
+        None,
+        Volcano,
+        Spring,
+        Meteor,
+        TornadoOrigin,
+        TornadoDirection,
+        TerrainUp,
+        TerrainDown
+    };
     PlacementTool placement_ = PlacementTool::None;
+    Vec3 tornado_origin_{};
     bool placement_miss_ = false;
     float terrain_brush_radius_ = 85.0f;
     double previous_;
     double simulation_time_ = 0.0;
+    double day_time_ = 0.0;
 
 public:
     AppState(GLFWwindow* window, const char* executable_path)
@@ -78,10 +90,12 @@ void AppState::frame() {
     double elapsed = std::clamp(now - previous_, 0.0, 0.1) * double(time_speed_);
     previous_ = now;
     simulation_time_ += elapsed;
+    if (!day_night_paused_)
+        day_time_ += elapsed;
     float cloud_top = cloud_base_ + cloud_thickness_;
     if (particle_simulation_enabled_)
         volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_);
-    lightning_.update(terrain_, elapsed, cloud_base_, cloud_top);
+    lightning_.update(terrain_, elapsed, water_level_, cloud_base_, cloud_top, volcanoes_);
     static const std::vector<Volcanoes::Meteor> no_moving_meteors;
     if (cloud_simulation_enabled_)
         clouds_.update(elapsed,
@@ -158,7 +172,7 @@ void AppState::frame() {
                   up * (io.MouseDelta.y * units_per_pixel);
     }
     Vec3 eye = target_ + orbit * distance_;
-    double wrapped_day = std::fmod(simulation_time_ / 60.0 + day_phase_offset_, 1.0);
+    double wrapped_day = std::fmod(day_time_ / 60.0 + day_phase_offset_, 1.0);
     if (wrapped_day < 0.0)
         wrapped_day += 1.0;
     float day = float(wrapped_day);
@@ -311,12 +325,26 @@ void AppState::frame() {
                     terrain_.deform(position, terrain_brush_radius_, elevation);
                     volcanoes_.terrain_changed(terrain_);
                     placement_miss_ = false;
+                } else if (placement_ == PlacementTool::TornadoOrigin) {
+                    tornado_origin_ = position;
+                    placement_ = PlacementTool::TornadoDirection;
+                    placement_miss_ = false;
+                } else if (placement_ == PlacementTool::TornadoDirection) {
+                    Vec3 direction = position - tornado_origin_;
+                    float horizontal_distance_squared =
+                        direction.x * direction.x + direction.z * direction.z;
+                    placement_miss_ = false;
+                    if (horizontal_distance_squared >= 25.0f) {
+                        volcanoes_.add_tornado(tornado_origin_, position, water_level_);
+                        placement_ = PlacementTool::None;
+                        placement_miss_ = false;
+                    }
                 } else {
                     if (placement_ == PlacementTool::Volcano)
                         volcanoes_.add_volcano(position);
                     else if (placement_ == PlacementTool::Spring)
                         volcanoes_.add_spring(position);
-                    else
+                    else if (placement_ == PlacementTool::Meteor)
                         volcanoes_.launch_meteor(position);
                     placement_ = PlacementTool::None;
                     placement_miss_ = false;
@@ -420,10 +448,6 @@ void AppState::frame() {
         nullptr,
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-    ImGui::TextColored(ImVec4(0.65f, 0.86f, 0.76f, 1), "E A R T H S I M");
-    ImGui::TextUnformatted("Procedural mountain range");
-    ImGui::Spacing();
-    ImGui::Text("FPS: %.1f", io.Framerate);
     float time_of_day_hours = day * 24.0f;
     ImGui::SetNextItemWidth(180 * ui_scale);
     if (ImGui::SliderFloat("Time of day",
@@ -433,6 +457,8 @@ void AppState::frame() {
             "%.2f h",
             ImGuiSliderFlags_AlwaysClamp))
         day_phase_offset_ += time_of_day_hours / 24.0f - day;
+    if (ImGui::Button(day_night_paused_ ? "Resume day-night cycle" : "Pause day-night cycle"))
+        day_night_paused_ = !day_night_paused_;
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Time speed", &time_speed_, 0.0f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
@@ -443,15 +469,17 @@ void AppState::frame() {
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat("Camera exposure",
         &camera_exposure_,
-        -5.0f,
-        5.0f,
+        -10.0f,
+        10.0f,
         "%+.1f EV",
         ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::Checkbox("Bloom", &bloom_enabled_);
     ImGui::SliderFloat(
         "Bloom intensity", &bloom_intensity_, 0.0f, 3.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
     ImGui::Text("Active volcanoes: %d", int(volcanoes_.volcano_count()));
     ImGui::Text("Active springs: %d", int(volcanoes_.spring_count()));
+    ImGui::Text("Active tornadoes: %d", int(volcanoes_.tornado_count()));
     if (ImGui::Button("Create volcano")) {
         placement_ = PlacementTool::Volcano;
         placement_miss_ = false;
@@ -466,6 +494,12 @@ void AppState::frame() {
     ImGui::SameLine();
     if (ImGui::Button("Meteor strike")) {
         placement_ = PlacementTool::Meteor;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Create tornado")) {
+        placement_ = PlacementTool::TornadoOrigin;
         placement_miss_ = false;
         panning_ = false;
     }
@@ -492,6 +526,10 @@ void AppState::frame() {
             placement_ == PlacementTool::Volcano     ? "Click terrain to place a volcano."
             : placement_ == PlacementTool::Spring    ? "Click terrain to place a spring."
             : placement_ == PlacementTool::Meteor    ? "Click terrain to target a meteor."
+            : placement_ == PlacementTool::TornadoOrigin
+                ? "Click terrain to set the tornado origin."
+            : placement_ == PlacementTool::TornadoDirection
+                ? "Click terrain to set the tornado direction."
             : placement_ == PlacementTool::TerrainUp ? "Click terrain to raise it."
                                                      : "Click terrain to lower it.";
         ImGui::TextUnformatted(placement_prompt);
@@ -502,6 +540,8 @@ void AppState::frame() {
         }
         if (placement_miss_)
             ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No terrain here. Click the landscape.");
+        else if (placement_ == PlacementTool::TornadoDirection)
+            ImGui::TextDisabled("Choose a point at least 5 units from the origin.");
     }
     ImGui::SetNextItemWidth(180 * ui_scale);
     float particle_lifetime = volcanoes_.particle_lifetime();
@@ -555,12 +595,13 @@ void AppState::frame() {
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Cloud height", &cloud_base_, 0.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::Checkbox("Bloom", &bloom_enabled_);
+
     // ImGui::Checkbox("SSGI", &ssgiEnabled);
     ImGui::Separator();
     ImGui::TextUnformatted(
         "Drag left mouse to pan\nDouble-click terrain to focus\nDrag right mouse to "
         "rotate\nScroll to zoom\nEsc to exit");
+    ImGui::Text("FPS: %.1f", io.Framerate);
     ImGui::End();
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x, 0.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.78f);

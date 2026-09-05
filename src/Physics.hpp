@@ -13,7 +13,15 @@ public:
     };
 
 private:
+    static constexpr size_t max_tornadoes_ = 8;
     static constexpr float source_clearance_ = 2.0f;
+    struct Tornado {
+        Vec3 position;
+        Vec3 velocity;
+        float age;
+        float lifetime;
+        uint32_t id;
+    };
     struct alignas(16) GpuParticle {
         float position_age[4];
         float velocity_life[4];
@@ -30,10 +38,19 @@ private:
         ~GpuSimulation();
         void upload_terrain(const Terrain& terrain);
         void spawn(const std::vector<GpuParticle>& records);
-        void step(float dt, bool interactions, float lifetime, float water_level, float wind_speed);
+        void step(float dt,
+            bool interactions,
+            float lifetime,
+            float water_level,
+            float wind_speed,
+            const std::array<float, max_tornadoes_ * 4>& tornado_centers,
+            const std::array<float, max_tornadoes_ * 4>& tornado_movements,
+            size_t tornado_count);
     };
     GpuSimulation gpu_;
     std::vector<Meteor> meteors_;
+    std::vector<Tornado> tornadoes_;
+    uint32_t next_tornado_id_ = 1;
     struct Sprite {
         Vec3 position;
         float size;
@@ -67,8 +84,10 @@ public:
     void terrain_changed(Terrain& terrain);
     void add_volcano(Vec3 position);
     void add_spring(Vec3 position);
+    void add_tornado(Vec3 position, Vec3 direction_point, float water_level);
     size_t volcano_count() const;
     size_t spring_count() const;
+    size_t tornado_count() const;
     const std::vector<Meteor>& meteors() const;
     GLuint terrain_texture() const;
     GLuint particle_buffer() const;
@@ -82,6 +101,8 @@ public:
     bool particle_interactions() const;
     void set_particle_interactions(bool enabled);
     void impact(Terrain& terrain, Vec3 position);
+    void water_impact(Vec3 position);
+    void lightning_water_impact(Vec3 position, size_t particle_count);
     void update(Terrain& terrain, double elapsed, float water_level, float wind_speed);
     void prepare_draw(const Mat4& vp,
         const Mat4& light_vp,
@@ -157,11 +178,20 @@ public:
     float range(float low, float high);
     std::vector<Vec3> path(Vec3 start, Vec3 end, int count, float jitter);
     void append_path(Strike& strike, const std::vector<Vec3>& points, float strength, float width);
-    void spawn(const Terrain& terrain, float cloud_base, float cloud_top);
+    void spawn(const Terrain& terrain,
+        float water_level,
+        float cloud_base,
+        float cloud_top,
+        Volcanoes& particles);
     double interval();
     float frequency() const;
     void set_frequency(float frequency);
-    void update(const Terrain& terrain, double elapsed, float cloud_base, float cloud_top);
+    void update(const Terrain& terrain,
+        double elapsed,
+        float water_level,
+        float cloud_base,
+        float cloud_top,
+        Volcanoes& particles);
     void draw(const Mat4& vp,
         Vec3 eye,
         Vec3 camera_right,
