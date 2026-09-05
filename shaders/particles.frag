@@ -58,27 +58,30 @@ void main() {
     vec3 surfaceColor=mix(radiance,emission,emissiveFactor);
     float interfaceOpacity=1.0;
     if(waterFactor>0.5) {
+        float shadowVisibility=sunVisibility();
+        float localDaylight=daylight*shadowVisibility;
         vec3 normal=vec3(0.0,1.0,0.0);
         vec3 reflection=reflect(-directionToEye,normal);
         float skyHeight=smoothstep(-0.15,0.85,reflection.y);
-        vec3 reflectedSky=mix(vec3(0.34,0.52,0.72),vec3(0.055,0.24,0.62),skyHeight)*daylight;
+        vec3 reflectedSky=mix(vec3(0.34,0.52,0.72),vec3(0.055,0.24,0.62),skyHeight)*localDaylight;
         if(!reflectionCapture) {
             vec4 reflectedClip=reflectionViewProjection*vec4(particleCenter,1.0);
             vec2 reflectionUv=reflectedClip.xy/max(abs(reflectedClip.w),0.0001)*0.5+0.5;
             vec2 ripple=vec2(sin(particleCenter.x*0.045+time*0.7),cos(particleCenter.z*0.052+time*0.58))*0.0025;
             float edge=min(min(reflectionUv.x,reflectionUv.y),min(1.0-reflectionUv.x,1.0-reflectionUv.y));
-            float inside=smoothstep(0.0,0.025,edge)*step(0.0001,reflectedClip.w);
+            float reflectionLighting=mix(1.0,shadowVisibility,daylight);
+            float inside=smoothstep(0.0,0.025,edge)*step(0.0001,reflectedClip.w)*reflectionLighting;
             vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv+ripple,vec2(0.001),vec2(0.999))).rgb;
             reflectedSky=mix(reflectedSky,planarReflection,inside);
         }
         bool viewedFromAir=directionToEye.y>=0.0;
         float facing=abs(dot(normal,directionToEye));
         float fresnel=dielectricFresnel(facing,viewedFromAir?1.0:1.333,viewedFromAir?1.333:1.0);
-        float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*daylight;
+        float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*localDaylight;
         vec3 reflectedRadiance=reflectedSky+vec3(1.0,0.88,0.62)*sunGlint*2.5;
         // A particle represents a much thinner water volume than the water plane.
         float transmission=exp(-0.38/max(facing,0.08));
-        vec3 waterScattering=mix(vec3(0.001,0.006,0.012),vec3(0.025,0.24,0.46),daylight);
+        vec3 waterScattering=mix(vec3(0.001,0.006,0.012),vec3(0.025,0.24,0.46),localDaylight);
         interfaceOpacity=1.0-(1.0-fresnel)*transmission;
         surfaceColor=(fresnel*reflectedRadiance
             +(1.0-fresnel)*(1.0-transmission)*waterScattering)/max(interfaceOpacity,0.0001);

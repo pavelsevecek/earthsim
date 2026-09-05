@@ -71,7 +71,11 @@ void main() {
             break;
         }
     }
-    if((flags&32u)!=0u) {
+    if((flags&8u)!=0u) {
+        vec2 windVelocity=normalize(vec2(0.85,0.35))*windSpeed;
+        particles[id].velocityLife.xz=mix(particles[id].velocityLife.xz,
+            windVelocity,1.0-exp(-0.8*dt));
+    } else if((flags&32u)!=0u) {
         if((flags&128u)==0u)
             particles[id].velocityLife.y=6.0;
         else {

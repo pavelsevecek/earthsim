@@ -499,6 +499,50 @@ void Volcanoes::set_particle_interactions(bool enabled) {
     particle_interactions_ = enabled;
 }
 
+void Volcanoes::add_surface_particles(
+    const Terrain& terrain, Vec3 center, float radius, float spacing, bool water) {
+    constexpr float golden_angle = 2.39996323f;
+    const float area = pi * radius * radius;
+    const size_t particle_count =
+        std::min(size_t(GpuSimulation::capacity_),
+            std::max(size_t(1), size_t(std::ceil(area / (spacing * spacing)))));
+
+    std::vector<GpuParticle> records;
+    records.reserve(particle_count);
+    const float phase = range(0, 2 * pi);
+    for (size_t i = 0; i < particle_count; ++i) {
+        // A sunflower distribution fills the whole brush evenly without the clumps
+        // and bare patches produced by independent random samples.
+        float radial_distance = radius * std::sqrt((float(i) + 0.5f) / float(particle_count));
+        float angle = phase + float(i) * golden_angle;
+        Vec3 position = center +
+                        Vec3{ std::cos(angle) * radial_distance, 0,
+                            std::sin(angle) * radial_distance };
+        if (std::abs(position.x) >= 999.0f || std::abs(position.z) >= 999.0f)
+            continue;
+
+        float size = range(1.2f, 2.2f);
+        Vec3 normal;
+        float ground = terrain.surface(position.x, position.z, normal);
+        float particle_radius = std::max(0.65f, size * 0.52f);
+        position.y = ground + particle_radius / std::max(normal.y, 0.25f) + 0.25f;
+        float temperature = water ? 300.0f : range(1450.0f, 1650.0f);
+        float flags = water ? 23.0f : 7.0f;
+        records.push_back({ { position.x, position.y, position.z, 0 },
+            { 0, 0, 0, 0 },
+            { size, temperature, flags, 1 } });
+    }
+    gpu_.spawn(records);
+}
+
+void Volcanoes::add_water(const Terrain& terrain, Vec3 center, float radius, float spacing) {
+    add_surface_particles(terrain, center, radius, spacing, true);
+}
+
+void Volcanoes::add_lava(const Terrain& terrain, Vec3 center, float radius, float spacing) {
+    add_surface_particles(terrain, center, radius, spacing, false);
+}
+
 void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
     terrain.carve_crater(position, 65.0f * size_scale);
     terrain_changed(terrain);

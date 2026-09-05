@@ -95,6 +95,8 @@ private:
     float erosion_speed_ = 50.0f;
     bool particle_interactions_ = true;
     float range(float low, float high);
+    void add_surface_particles(
+        const Terrain& terrain, Vec3 center, float radius, float spacing, bool water);
 
 public:
     explicit Volcanoes(const std::filesystem::path& directory, const Terrain& terrain);
@@ -125,6 +127,8 @@ public:
     void set_erosion_speed(float speed);
     bool particle_interactions() const;
     void set_particle_interactions(bool enabled);
+    void add_water(const Terrain& terrain, Vec3 center, float radius, float spacing);
+    void add_lava(const Terrain& terrain, Vec3 center, float radius, float spacing);
     void impact(Terrain& terrain, Vec3 position, float size_scale);
     void water_impact(Vec3 position);
     void lightning_water_impact(Vec3 position, size_t particle_count);

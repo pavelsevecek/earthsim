@@ -6,69 +6,69 @@
 
 namespace earth_sim {
 namespace {
-bool world_to_screen(Vec3 position,
-    Vec3 eye,
-    Vec3 forward,
-    Vec3 right,
-    Vec3 up,
-    ImVec2 display_size,
-    ImVec2& screen) {
-    Vec3 relative = position - eye;
-    float depth = dot(relative, forward);
-    if (depth <= 0.01f)
-        return false;
+    bool world_to_screen(Vec3 position,
+        Vec3 eye,
+        Vec3 forward,
+        Vec3 right,
+        Vec3 up,
+        ImVec2 display_size,
+        ImVec2& screen) {
+        Vec3 relative = position - eye;
+        float depth = dot(relative, forward);
+        if (depth <= 0.01f)
+            return false;
 
-    constexpr float tan_half_fov = 0.41421356237f;
-    float half_height = std::max(display_size.y * 0.5f, 1.0f);
-    float focal_length = half_height / tan_half_fov;
-    screen = { display_size.x * 0.5f + dot(relative, right) * focal_length / depth,
-        display_size.y * 0.5f - dot(relative, up) * focal_length / depth };
-    return screen.x >= 0 && screen.x <= display_size.x && screen.y >= 0 &&
-           screen.y <= display_size.y;
-}
-
-ImVec2 source_marker_center(ImVec2 anchor) {
-    return { anchor.x, anchor.y - 12.0f * ui_scale };
-}
-
-void draw_source_marker(ImDrawList* draw_list, ImVec2 anchor, bool spring, bool selected) {
-    float scale = ui_scale;
-    float radius = 8.0f * scale;
-    ImVec2 center = source_marker_center(anchor);
-    ImU32 shadow = IM_COL32(0, 0, 0, 150);
-    ImU32 fill = spring ? IM_COL32(35, 164, 230, 245) : IM_COL32(235, 82, 30, 245);
-    ImU32 accent = spring ? IM_COL32(225, 249, 255, 255) : IM_COL32(255, 220, 70, 255);
-
-    draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 5.0f * scale },
-        { center.x + 4.0f * scale, center.y + 5.0f * scale },
-        { anchor.x, anchor.y + 2.0f * scale },
-        shadow);
-    draw_list->AddCircleFilled({ center.x + scale, center.y + scale }, radius, shadow, 16);
-    draw_list->AddTriangleFilled({ center.x - 3.5f * scale, center.y + 5.0f * scale },
-        { center.x + 3.5f * scale, center.y + 5.0f * scale },
-        anchor,
-        fill);
-    draw_list->AddCircleFilled(center, radius, fill, 16);
-
-    if (spring) {
-        for (int row = -1; row <= 1; ++row) {
-            float y = center.y + row * 3.0f * scale;
-            draw_list->AddLine({ center.x - 4.5f * scale, y },
-                { center.x + 4.5f * scale, y },
-                accent,
-                1.2f * scale);
-        }
-    } else {
-        ImVec2 flame_center{ center.x, center.y + 1.5f * scale };
-        draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 4.0f * scale },
-            { center.x + 4.0f * scale, center.y + 4.0f * scale },
-            { center.x + 1.0f * scale, center.y - 5.0f * scale },
-            accent);
-        draw_list->AddCircleFilled(flame_center, 3.7f * scale, accent, 12);
+        constexpr float tan_half_fov = 0.41421356237f;
+        float half_height = std::max(display_size.y * 0.5f, 1.0f);
+        float focal_length = half_height / tan_half_fov;
+        screen = { display_size.x * 0.5f + dot(relative, right) * focal_length / depth,
+            display_size.y * 0.5f - dot(relative, up) * focal_length / depth };
+        return screen.x >= 0 && screen.x <= display_size.x && screen.y >= 0 &&
+               screen.y <= display_size.y;
     }
-    if (selected)
-        draw_list->AddCircle(center, radius + 2.0f * scale, IM_COL32_WHITE, 20, 2.0f * scale);
-}
+
+    ImVec2 source_marker_center(ImVec2 anchor) {
+        return { anchor.x, anchor.y - 12.0f * ui_scale };
+    }
+
+    void draw_source_marker(ImDrawList* draw_list, ImVec2 anchor, bool spring, bool selected) {
+        float scale = ui_scale;
+        float radius = 8.0f * scale;
+        ImVec2 center = source_marker_center(anchor);
+        ImU32 shadow = IM_COL32(0, 0, 0, 150);
+        ImU32 fill = spring ? IM_COL32(35, 164, 230, 245) : IM_COL32(235, 82, 30, 245);
+        ImU32 accent = spring ? IM_COL32(225, 249, 255, 255) : IM_COL32(255, 220, 70, 255);
+
+        draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 5.0f * scale },
+            { center.x + 4.0f * scale, center.y + 5.0f * scale },
+            { anchor.x, anchor.y + 2.0f * scale },
+            shadow);
+        draw_list->AddCircleFilled({ center.x + scale, center.y + scale }, radius, shadow, 16);
+        draw_list->AddTriangleFilled({ center.x - 3.5f * scale, center.y + 5.0f * scale },
+            { center.x + 3.5f * scale, center.y + 5.0f * scale },
+            anchor,
+            fill);
+        draw_list->AddCircleFilled(center, radius, fill, 16);
+
+        if (spring) {
+            for (int row = -1; row <= 1; ++row) {
+                float y = center.y + row * 3.0f * scale;
+                draw_list->AddLine({ center.x - 4.5f * scale, y },
+                    { center.x + 4.5f * scale, y },
+                    accent,
+                    1.2f * scale);
+            }
+        } else {
+            ImVec2 flame_center{ center.x, center.y + 1.5f * scale };
+            draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 4.0f * scale },
+                { center.x + 4.0f * scale, center.y + 4.0f * scale },
+                { center.x + 1.0f * scale, center.y - 5.0f * scale },
+                accent);
+            draw_list->AddCircleFilled(flame_center, 3.7f * scale, accent, 12);
+        }
+        if (selected)
+            draw_list->AddCircle(center, radius + 2.0f * scale, IM_COL32_WHITE, 20, 2.0f * scale);
+    }
 } // namespace
 
 class AppState {
@@ -120,7 +120,9 @@ class AppState {
         TornadoOrigin,
         TornadoDirection,
         TerrainUp,
-        TerrainDown
+        TerrainDown,
+        AddWater,
+        AddLava
     };
     enum class SourceType { None, Lava, Spring };
     PlacementTool placement_ = PlacementTool::None;
@@ -128,7 +130,8 @@ class AppState {
     size_t selected_source_index_ = 0;
     Vec3 tornado_origin_{};
     bool placement_miss_ = false;
-    float terrain_brush_radius_ = 85.0f;
+    float brush_radius_ = 85.0f;
+    float particle_spacing_ = 3.0f;
     double previous_;
     double simulation_time_ = 0.0;
     double day_time_ = 0.0;
@@ -430,8 +433,17 @@ void AppState::frame() {
                 else if (placement_ == PlacementTool::TerrainUp ||
                          placement_ == PlacementTool::TerrainDown) {
                     float elevation = placement_ == PlacementTool::TerrainUp ? 18.0f : -18.0f;
-                    terrain_.deform(position, terrain_brush_radius_, elevation);
+                    terrain_.deform(position, brush_radius_, elevation);
                     volcanoes_.terrain_changed(terrain_);
+                    placement_miss_ = false;
+                } else if (placement_ == PlacementTool::AddWater ||
+                           placement_ == PlacementTool::AddLava) {
+                    if (placement_ == PlacementTool::AddWater)
+                        volcanoes_.add_water(
+                            terrain_, position, brush_radius_, particle_spacing_);
+                    else
+                        volcanoes_.add_lava(
+                            terrain_, position, brush_radius_, particle_spacing_);
                     placement_miss_ = false;
                 } else if (placement_ == PlacementTool::TornadoOrigin) {
                     tornado_origin_ = position;
@@ -563,8 +575,13 @@ void AppState::frame() {
         }
         for (size_t i = 0; i < volcanoes_.spring_sources().size(); ++i) {
             ImVec2 screen;
-            if (world_to_screen(
-                    volcanoes_.spring_sources()[i], eye, forward, right, up, io.DisplaySize, screen))
+            if (world_to_screen(volcanoes_.spring_sources()[i],
+                    eye,
+                    forward,
+                    right,
+                    up,
+                    io.DisplaySize,
+                    screen))
                 draw_source_marker(source_icons,
                     screen,
                     true,
@@ -635,6 +652,8 @@ void AppState::frame() {
         placement_miss_ = false;
         panning_ = false;
     }
+   
+    ImGui::SameLine();
     if (ImGui::Button("Terrain up")) {
         placement_ = PlacementTool::TerrainUp;
         placement_miss_ = false;
@@ -646,15 +665,40 @@ void AppState::frame() {
         placement_miss_ = false;
         panning_ = false;
     }
+    if (ImGui::Button("Add water")) {
+        placement_ = PlacementTool::AddWater;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Add lava")) {
+        placement_ = PlacementTool::AddLava;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+
+    if (ImGui::Button("None")) {
+        placement_ = PlacementTool::None;
+        placement_miss_ = false;
+        panning_ = false;
+    }
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
-        "Meteor size", &meteor_size_, 0.25f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+        "Meteor size", &meteor_size_, 0.1f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
-    ImGui::SliderFloat("Terrain brush radius",
-        &terrain_brush_radius_,
+    ImGui::SliderFloat("Brush radius",
+        &brush_radius_,
         10.0f,
         300.0f,
         "%.0f",
+        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Particle spacing",
+        &particle_spacing_,
+        1.0f,
+        12.0f,
+        "%.1f",
         ImGuiSliderFlags_AlwaysClamp);
     if (placement_ != PlacementTool::None) {
         const char* placement_prompt =
@@ -665,8 +709,10 @@ void AppState::frame() {
                 ? "Click terrain to set the tornado origin."
             : placement_ == PlacementTool::TornadoDirection
                 ? "Click terrain to set the tornado direction."
-            : placement_ == PlacementTool::TerrainUp ? "Click terrain to raise it."
-                                                     : "Click terrain to lower it.";
+            : placement_ == PlacementTool::TerrainUp   ? "Click terrain to raise it."
+            : placement_ == PlacementTool::TerrainDown ? "Click terrain to lower it."
+            : placement_ == PlacementTool::AddWater    ? "Click terrain to add water."
+                                                       : "Click terrain to add lava.";
         ImGui::TextUnformatted(placement_prompt);
         ImGui::TextDisabled("Esc cancels placement.");
         if (ImGui::Button("Cancel placement")) {
