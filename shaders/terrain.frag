@@ -29,7 +29,7 @@ float hazeOpticalDepth(float distanceToEye) {
 float terrainVisibility(int layer, vec3 geometricNormal, vec3 lightDirection) {
     vec3 p = shadowPosition[layer].xyz / shadowPosition[layer].w * 0.5 + 0.5;
     if(any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
-    float bias = max(0.00006, 0.0003 * (1.0 - abs(dot(geometricNormal, lightDirection))));
+    float bias = max(0.001, 0.001 * (1.0 - abs(dot(geometricNormal, lightDirection))));
     vec2 texel = 1.0 / vec2(textureSize(terrainShadowMap, 0).xy);
     float visibility = 0.0;
     for(int y = -1; y <= 1; ++y) for(int x = -1; x <= 1; ++x)

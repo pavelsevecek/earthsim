@@ -1,0 +1,44 @@
+#version 430 core
+layout(local_size_x = 128) in;
+struct Particle { vec4 positionAge; vec4 velocityLife; vec4 data; };
+layout(std430,binding=0) buffer Particles { Particle particles[]; };
+layout(std430,binding=2) buffer Scratch { vec4 scratch[]; };
+layout(std430,binding=3) buffer Lambdas { float lambdas[]; };
+layout(std430,binding=4) buffer Heads { int heads[]; };
+layout(std430,binding=5) buffer Next { int nextParticle[]; };
+uniform uint capacity;
+uniform bool interactions;
+const float support=4.0;
+const float restDensity=1.0/(1.5*1.5*1.5);
+const uint bucketCount=32768u;
+
+ivec3 particleCell(vec3 p) { return ivec3(floor(p/support)); }
+uint hashCell(ivec3 c) { return (uint(c.x)*73856093u ^ uint(c.y)*19349663u ^ uint(c.z)*83492791u)&(bucketCount-1u); }
+float kernel(float r2) { float q=max(0.0,support*support-r2); return 315.0/(64.0*3.14159265*pow(support,9.0))*q*q*q; }
+vec3 gradientKernel(vec3 d,float r,uint i,uint j) {
+    if(r<0.0001) {
+        uint key=min(i,j)*1664525u+max(i,j)*1013904223u;
+        d=vec3(0); d[key%3u]=(i<j?1.0:-1.0)*0.0001; r=0.0001;
+    }
+    return d*(-45.0/(3.14159265*pow(support,6.0))*pow(support-r,2.0)/r);
+}
+void main() {
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=capacity || particles[id].data.w<0.5) return;
+    vec3 correction=vec3(0);
+    if(interactions && (uint(particles[id].data.z)&2u)!=0u) {
+        ivec3 origin=particleCell(particles[id].positionAge.xyz);
+        for(int z=-1;z<=1;++z) for(int y=-1;y<=1;++y) for(int x=-1;x<=1;++x) {
+            ivec3 cell=origin+ivec3(x,y,z);
+            for(int j=heads[hashCell(cell)],guard=0;j>=0 && guard<512;j=nextParticle[j],++guard) {
+                if(uint(j)==id || any(notEqual(particleCell(particles[j].positionAge.xyz),cell))) continue;
+                vec3 d=particles[id].positionAge.xyz-particles[j].positionAge.xyz; float r2=dot(d,d);
+                if(r2>=support*support) continue;
+                float ratio=kernel(r2)/kernel(0.09*support*support);
+                correction+=gradientKernel(d,sqrt(r2),id,uint(j))*(lambdas[id]+lambdas[j]-0.001*pow(ratio,4.0))/restDensity;
+            }
+        }
+    }
+    float lengthCorrection=length(correction);
+    scratch[id]=vec4(correction*(lengthCorrection>0.6?0.6/lengthCorrection:1.0),0);
+}

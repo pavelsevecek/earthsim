@@ -1,0 +1,59 @@
+#version 430 core
+layout(local_size_x = 128) in;
+layout(std430,binding=2) readonly buffer TerrainFlow { ivec4 terrainFlow[]; };
+layout(std430,binding=7) buffer TerrainDelta { int terrainDelta[]; };
+uniform sampler2D terrainHeight;
+uniform uint capacity;
+uniform float dt;
+uniform float erosionSpeed;
+uniform float terrainDeltaScale;
+const uint terrainSize=513u;
+const float terrainStep=2000.0/512.0;
+const float terrainCellArea=terrainStep*terrainStep;
+const float flowScale=4096.0;
+const float minimumErosionSpeed=0.35;
+
+float heightAt(vec2 xz) { return texture(terrainHeight,xz/2000.0+0.5).r; }
+vec3 terrainNormal(vec2 xz) {
+    return normalize(vec3(heightAt(xz-vec2(terrainStep,0))-heightAt(xz+vec2(terrainStep,0)),
+        2.0*terrainStep,
+        heightAt(xz-vec2(0,terrainStep))-heightAt(xz+vec2(0,terrainStep))));
+}
+void removeTerrain(ivec2 center,float materialVolume) {
+    float heightDelta=-materialVolume/terrainCellArea;
+    float weights=0.0;
+    for(int z=-2;z<=2;++z) for(int x=-2;x<=2;++x) {
+        ivec2 cell=center+ivec2(x,z);
+        if(any(lessThan(cell,ivec2(0)))||
+            any(greaterThanEqual(cell,ivec2(int(terrainSize))))) continue;
+        weights+=exp(-0.5*float(x*x+z*z)/(1.15*1.15));
+    }
+    for(int z=-2;z<=2;++z) for(int x=-2;x<=2;++x) {
+        ivec2 cell=center+ivec2(x,z);
+        if(any(lessThan(cell,ivec2(0)))||
+            any(greaterThanEqual(cell,ivec2(int(terrainSize))))) continue;
+        float weight=exp(-0.5*float(x*x+z*z)/(1.15*1.15))/weights;
+        int delta=int(round(heightDelta*weight*terrainDeltaScale));
+        atomicAdd(terrainDelta[uint(cell.y)*terrainSize+uint(cell.x)],delta);
+    }
+}
+void main() {
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=capacity || terrainFlow[id].x<=0 || erosionSpeed<=0.0) return;
+    float volume=float(terrainFlow[id].x)/flowScale;
+    if(volume<=0.0) return;
+    vec2 velocity=vec2(float(terrainFlow[id].y),float(terrainFlow[id].z))
+        /(flowScale*volume);
+    float horizontalSpeed=length(velocity);
+    float verticalSpeed=float(terrainFlow[id].w)/(flowScale*volume);
+    float erosionMagnitude=max(0.0,horizontalSpeed-verticalSpeed);
+    if(erosionMagnitude<minimumErosionSpeed) return;
+    ivec2 cell=ivec2(int(id%terrainSize),int(id/terrainSize));
+    vec2 xz=vec2(cell)*(2000.0/512.0)-1000.0;
+    vec3 normal=terrainNormal(xz);
+    // Saturating discharge prevents dense particle clusters from drilling wells
+    // while still allowing a larger stream to cut faster than a thin trickle.
+    float discharge=0.25*(1.0-exp(-volume/0.25));
+    float erodedVolume=0.3*discharge*erosionMagnitude*0.2*dt*erosionSpeed;
+    removeTerrain(cell,erodedVolume);
+}

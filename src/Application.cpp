@@ -41,6 +41,7 @@ class AppState {
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
     bool day_night_paused_ = false;
+    float meteor_size_ = 1.0f;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
@@ -345,7 +346,7 @@ void AppState::frame() {
                     else if (placement_ == PlacementTool::Spring)
                         volcanoes_.add_spring(position);
                     else if (placement_ == PlacementTool::Meteor)
-                        volcanoes_.launch_meteor(position);
+                        volcanoes_.launch_meteor(position, meteor_size_);
                     placement_ = PlacementTool::None;
                     placement_miss_ = false;
                 }
@@ -515,6 +516,9 @@ void AppState::frame() {
         panning_ = false;
     }
     ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Meteor size", &meteor_size_, 0.25f, 4.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat("Terrain brush radius",
         &terrain_brush_radius_,
         10.0f,
@@ -523,9 +527,9 @@ void AppState::frame() {
         ImGuiSliderFlags_AlwaysClamp);
     if (placement_ != PlacementTool::None) {
         const char* placement_prompt =
-            placement_ == PlacementTool::Volcano     ? "Click terrain to place a volcano."
-            : placement_ == PlacementTool::Spring    ? "Click terrain to place a spring."
-            : placement_ == PlacementTool::Meteor    ? "Click terrain to target a meteor."
+            placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."
+            : placement_ == PlacementTool::Spring ? "Click terrain to place a spring."
+            : placement_ == PlacementTool::Meteor ? "Click terrain to target a meteor."
             : placement_ == PlacementTool::TornadoOrigin
                 ? "Click terrain to set the tornado origin."
             : placement_ == PlacementTool::TornadoDirection
@@ -556,6 +560,10 @@ void AppState::frame() {
             "%.2fx",
             ImGuiSliderFlags_AlwaysClamp))
         volcanoes_.set_particle_brightness(particle_brightness);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float erosion_speed = volcanoes_.erosion_speed();
+    if (ImGui::DragFloat("Erosion speed", &erosion_speed, 1.f, 0.0f, 1000.0f, "%.2fx"))
+        volcanoes_.set_erosion_speed(erosion_speed);
     ImGui::Checkbox("Particle simulation", &particle_simulation_enabled_);
     bool particle_interactions = volcanoes_.particle_interactions();
     if (ImGui::Checkbox("Particle interactions", &particle_interactions))
@@ -583,6 +591,9 @@ void AppState::frame() {
     ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);
     if (ImGui::Button("Clear clouds"))
         clouds_.clear_density();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset clouds"))
+        clouds_.reset(wind_speed_, cloud_base_, cloud_top);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Cloud coverage", &cloud_coverage_, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);

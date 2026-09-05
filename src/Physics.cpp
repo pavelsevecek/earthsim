@@ -3,7 +3,28 @@
 namespace earth_sim {
 Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
     const Terrain& terrain) {
-    compute = compute_program(directory, "particle_compute");
+    try {
+        constexpr std::array<const char*, 12> pass_names{
+            "particle_clear_hash",
+            "particle_integrate",
+            "particle_build_hash",
+            "particle_density_constraint",
+            "particle_position_correction",
+            "particle_apply_correction",
+            "particle_reconstruct_velocity",
+            "particle_viscosity_collision",
+            "particle_surface_exchange",
+            "particle_water_lava_interaction",
+            "terrain_clear_flow",
+            "terrain_erode_flow"
+        };
+        for (size_t pass = 0; pass < compute.size(); ++pass)
+            compute[pass] = compute_program(directory, pass_names[pass]);
+    } catch (...) {
+        for (GLuint program : compute)
+            glDeleteProgram(program);
+        throw;
+    }
     glGenBuffers(GLsizei(buffers.size()), buffers.data());
     const GLsizeiptr sizes[] = { GLsizeiptr(capacity_ * sizeof(GpuParticle)),
         GLsizeiptr(capacity_ * 4 * sizeof(float)),
@@ -16,6 +37,43 @@ Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
         glBufferData(GL_SHADER_STORAGE_BUFFER, sizes[i], nullptr, GL_DYNAMIC_DRAW);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
     }
+    glGenBuffers(1, &sediment);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, sediment);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+        GLsizeiptr(capacity_ * 4 * sizeof(float)),
+        nullptr,
+        GL_DYNAMIC_DRAW);
+    const float zero_float = 0;
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero_float);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, sediment);
+
+    glGenBuffers(1, &terrain_delta);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_delta);
+    constexpr size_t terrain_values = size_t(terrain_size_) * terrain_size_;
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+        GLsizeiptr(terrain_values * sizeof(int32_t)),
+        nullptr,
+        GL_DYNAMIC_COPY);
+    const int32_t zero_int = 0;
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero_int);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, terrain_delta);
+
+    glGenBuffers(1, &terrain_flow);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_flow);
+    glBufferData(GL_SHADER_STORAGE_BUFFER,
+        GLsizeiptr(terrain_values * 4 * sizeof(int32_t)),
+        nullptr,
+        GL_DYNAMIC_DRAW);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero_int);
+
+    for (auto& readback : erosion_readbacks) {
+        glGenBuffers(1, &readback.buffer);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, readback.buffer);
+        glBufferData(GL_COPY_WRITE_BUFFER,
+            GLsizeiptr(terrain_values * sizeof(int32_t)),
+            nullptr,
+            GL_STREAM_READ);
+    }
     std::vector<GpuParticle> inactive(capacity_);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[0]);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER,
@@ -27,7 +85,16 @@ Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
 }
 
 Volcanoes::GpuSimulation::~GpuSimulation() {
-    glDeleteProgram(compute);
+    for (auto& readback : erosion_readbacks) {
+        if (readback.fence)
+            glDeleteSync(readback.fence);
+        glDeleteBuffers(1, &readback.buffer);
+    }
+    glDeleteBuffers(1, &terrain_delta);
+    glDeleteBuffers(1, &terrain_flow);
+    glDeleteBuffers(1, &sediment);
+    for (GLuint program : compute)
+        glDeleteProgram(program);
     glDeleteBuffers(GLsizei(buffers.size()), buffers.data());
     glDeleteTextures(1, &terrain_texture);
 }
@@ -60,43 +127,105 @@ void Volcanoes::GpuSimulation::spawn(const std::vector<GpuParticle>& records) {
             GLintptr(cursor * sizeof(GpuParticle)),
             GLsizeiptr(count * sizeof(GpuParticle)),
             records.data() + source);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, sediment);
+        const float zero = 0;
+        glClearBufferSubData(GL_SHADER_STORAGE_BUFFER,
+            GL_R32F,
+            GLintptr(cursor * 4 * sizeof(float)),
+            GLsizeiptr(count * 4 * sizeof(float)),
+            GL_RED,
+            GL_FLOAT,
+            &zero);
         cursor = (cursor + uint32_t(count)) % capacity_;
         source += count;
     }
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+}
+
+bool Volcanoes::GpuSimulation::schedule_erosion_readback() {
+    auto available = std::find_if(erosion_readbacks.begin(),
+        erosion_readbacks.end(),
+        [](const ErosionReadback& readback) { return readback.fence == nullptr; });
+    if (available == erosion_readbacks.end())
+        return false;
+    constexpr GLsizeiptr bytes =
+        GLsizeiptr(size_t(terrain_size_) * terrain_size_ * sizeof(int32_t));
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+    glBindBuffer(GL_COPY_READ_BUFFER, terrain_delta);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, available->buffer);
+    glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, bytes);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_delta);
+    const int32_t zero = 0;
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero);
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+    available->fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    glFlush();
+    return true;
+}
+
+bool Volcanoes::GpuSimulation::consume_erosion_readback(std::vector<int32_t>& deltas) {
+    auto ready = std::find_if(erosion_readbacks.begin(),
+        erosion_readbacks.end(),
+        [](const ErosionReadback& readback) {
+            if (!readback.fence)
+                return false;
+            GLenum status = glClientWaitSync(readback.fence, 0, 0);
+            return status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED;
+        });
+    if (ready == erosion_readbacks.end())
+        return false;
+    constexpr size_t values = size_t(terrain_size_) * terrain_size_;
+    constexpr GLsizeiptr bytes = GLsizeiptr(values * sizeof(int32_t));
+    glBindBuffer(GL_COPY_WRITE_BUFFER, ready->buffer);
+    const auto* mapped = static_cast<const int32_t*>(
+        glMapBufferRange(GL_COPY_WRITE_BUFFER, 0, bytes, GL_MAP_READ_BIT));
+    if (!mapped)
+        throw std::runtime_error("Cannot map completed terrain erosion readback.");
+    deltas.assign(mapped, mapped + values);
+    glUnmapBuffer(GL_COPY_WRITE_BUFFER);
+    glDeleteSync(ready->fence);
+    ready->fence = nullptr;
+    return true;
 }
 
 void Volcanoes::GpuSimulation::step(float dt,
     bool interactions,
+    float erosion_speed,
     float lifetime,
     float water_level,
     float wind_speed,
     const std::array<float, max_tornadoes_ * 4>& tornado_centers,
     const std::array<float, max_tornadoes_ * 4>& tornado_movements,
     size_t tornado_count) {
-    glUseProgram(compute);
     for (size_t i = 0; i < buffers.size(); ++i)
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, sediment);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, terrain_delta);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, terrain_texture);
-    glUniform1i(glGetUniformLocation(compute, "terrainHeight"), 0);
-    glUniform1ui(glGetUniformLocation(compute, "capacity"), capacity_);
-    glUniform1f(glGetUniformLocation(compute, "dt"), dt);
-    glUniform1f(glGetUniformLocation(compute, "particleLifetime"), lifetime);
-    glUniform1f(glGetUniformLocation(compute, "waterLevel"), water_level);
-    glUniform1f(glGetUniformLocation(compute, "windSpeed"), wind_speed);
-    glUniform1i(glGetUniformLocation(compute, "tornadoCount"), GLint(tornado_count));
-    if (tornado_count > 0) {
-        glUniform4fv(glGetUniformLocation(compute, "tornadoCenterId[0]"),
-            GLsizei(tornado_count),
-            tornado_centers.data());
-        glUniform4fv(glGetUniformLocation(compute, "tornadoMovementHeight[0]"),
-            GLsizei(tornado_count),
-            tornado_movements.data());
-    }
-    glUniform1i(glGetUniformLocation(compute, "interactions"), interactions ? 1 : 0);
     auto run = [&](int pass, uint32_t count) {
-        glUniform1i(glGetUniformLocation(compute, "pass"), pass);
+        GLuint program = compute[size_t(pass)];
+        glUseProgram(program);
+        glUniform1i(glGetUniformLocation(program, "terrainHeight"), 0);
+        glUniform1ui(
+            glGetUniformLocation(program, "capacity"), pass >= 10 ? count : capacity_);
+        glUniform1f(glGetUniformLocation(program, "dt"), dt);
+        glUniform1f(glGetUniformLocation(program, "particleLifetime"), lifetime);
+        glUniform1f(glGetUniformLocation(program, "waterLevel"), water_level);
+        glUniform1f(glGetUniformLocation(program, "windSpeed"), wind_speed);
+        glUniform1f(glGetUniformLocation(program, "erosionSpeed"), erosion_speed);
+        glUniform1f(
+            glGetUniformLocation(program, "terrainDeltaScale"), terrain_delta_scale_);
+        glUniform1i(glGetUniformLocation(program, "tornadoCount"), GLint(tornado_count));
+        if (tornado_count > 0) {
+            glUniform4fv(glGetUniformLocation(program, "tornadoCenterId[0]"),
+                GLsizei(tornado_count),
+                tornado_centers.data());
+            glUniform4fv(glGetUniformLocation(program, "tornadoMovementHeight[0]"),
+                GLsizei(tornado_count),
+                tornado_movements.data());
+        }
+        glUniform1i(glGetUniformLocation(program, "interactions"), interactions ? 1 : 0);
         glDispatchCompute((count + 127) / 128, 1, 1);
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
     };
@@ -119,6 +248,11 @@ void Volcanoes::GpuSimulation::step(float dt,
     }
     run(6, capacity_);
     run(7, capacity_);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, terrain_flow);
+    constexpr uint32_t terrain_values = terrain_size_ * terrain_size_;
+    run(10, terrain_values);
+    run(8, capacity_);
+    run(11, terrain_values);
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 }
 
@@ -206,14 +340,17 @@ Volcanoes::~Volcanoes() {
     glDeleteProgram(shader_);
 }
 
-void Volcanoes::launch_meteor(Vec3 target) {
+void Volcanoes::launch_meteor(Vec3 target, float size_scale) {
     float azimuth = range(0, 2 * pi);
     float tilt = range(15, 55) * pi / 180;
     Vec3 approach{
         std::sin(tilt) * std::cos(azimuth), std::cos(tilt), std::sin(tilt) * std::sin(azimuth)
     };
     meteors_.push_back(
-        { target + approach * (700 / approach.y), approach * (-range(650, 900)), 0 });
+        { target + approach * (700 / approach.y),
+            approach * (-range(650, 900)),
+            0,
+            size_scale });
 }
 
 void Volcanoes::terrain_changed(Terrain& terrain) {
@@ -328,6 +465,14 @@ void Volcanoes::set_particle_brightness(float brightness) {
     particle_brightness_ = brightness;
 }
 
+float Volcanoes::erosion_speed() const {
+    return erosion_speed_;
+}
+
+void Volcanoes::set_erosion_speed(float speed) {
+    erosion_speed_ = std::max(0.0f, speed);
+}
+
 bool Volcanoes::particle_interactions() const {
     return particle_interactions_;
 }
@@ -336,15 +481,15 @@ void Volcanoes::set_particle_interactions(bool enabled) {
     particle_interactions_ = enabled;
 }
 
-void Volcanoes::impact(Terrain& terrain, Vec3 position) {
-    terrain.carve_crater(position, 65.0f);
+void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
+    terrain.carve_crater(position, 65.0f * size_scale);
     terrain_changed(terrain);
     constexpr size_t ejecta_count = 1200;
     std::vector<GpuParticle> records;
     records.reserve(ejecta_count);
     for (size_t i = 0; i < ejecta_count; ++i) {
         float angle = range(0, 2 * pi);
-        float speed = range(10, 50);
+        float speed = range(10, 50) * size_scale;
         // Cone surface: exactly 45 degrees from global +Y, independent of slope.
         float horizontal_speed = speed * std::sin(pi / 4);
         Vec3 velocity{ std::cos(angle) * horizontal_speed,
@@ -355,7 +500,7 @@ void Volcanoes::impact(Terrain& terrain, Vec3 position) {
         Vec3 n;
         p.y = std::max(p.y, terrain.surface(p.x, p.z, n) + 2);
         p = p + velocity * 0.2f;
-        float size = range(1.2f, 2.8f);
+        float size = range(1.2f, 2.8f) * size_scale;
         float temperature = range(1550, 1800);
         records.push_back({ { p.x, p.y, p.z, 0 },
             { velocity.x, velocity.y, velocity.z, 0 },
@@ -403,7 +548,16 @@ void Volcanoes::lightning_water_impact(Vec3 position, size_t particle_count) {
 void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, float wind_speed) {
     constexpr float dt = 1.0f / 120.0f;
     // The shared clock bounds real elapsed time before applying the speed multiplier.
+    std::vector<int32_t> erosion_delta;
+    bool terrain_eroded = false;
+    while (gpu_.consume_erosion_readback(erosion_delta))
+        terrain_eroded |= terrain.apply_height_deltas(
+            erosion_delta, 1.0f / GpuSimulation::terrain_delta_scale_);
+    if (terrain_eroded)
+        terrain_changed(terrain);
+
     accumulator_ += elapsed;
+    erosion_readback_accumulator_ += elapsed;
     while (accumulator_ >= dt) {
         accumulator_ -= dt;
         std::array<float, max_tornadoes_ * 4> tornado_centers{};
@@ -475,7 +629,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
                 Vec3 p = previous_position + (next - previous_position) * range(0, 1);
                 Vec3 v{ range(-1.5f, 1.5f), range(-0.5f, 0.5f), range(-1.5f, 1.5f) };
                 float life = range(1.5f, 3.0f);
-                float size = range(1.5f, 3.5f);
+                float size = range(1.5f, 3.5f) * meteor.size_scale;
                 gpu_.spawn({ GpuParticle{
                     { p.x, p.y, p.z, 0 }, { v.x, v.y, v.z, life }, { size, 1800, 8, 1 } } });
             }
@@ -484,7 +638,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
                 if (hit_water)
                     water_impact(next);
                 else
-                    impact(terrain, next);
+                    impact(terrain, next, meteor.size_scale);
                 meteors_.erase(meteors_.begin() + i);
             } else if (next.y < terrain.min_height() - 1000)
                 meteors_.erase(meteors_.begin() + i);
@@ -527,6 +681,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
         gpu_.spawn(spawned);
         gpu_.step(dt,
             particle_interactions_,
+            erosion_speed_,
             particle_lifetime_,
             water_level,
             wind_speed,
@@ -534,6 +689,8 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
             tornado_movements,
             tornadoes_.size());
     }
+    if (erosion_readback_accumulator_ >= 0.1 && gpu_.schedule_erosion_readback())
+        erosion_readback_accumulator_ = std::fmod(erosion_readback_accumulator_, 0.1);
 }
 
 void Volcanoes::prepare_draw(const Mat4& vp,
@@ -639,7 +796,7 @@ void Volcanoes::draw(const Mat4& vp,
     for (Vec3 vent : vents_)
         sprites_.push_back({ vent + Vec3{ 0, 3.0f, 0 }, 5, 1, glow(1600) });
     for (const auto& meteor : meteors_)
-        sprites_.push_back({ meteor.position, 8, 1, glow(1800) * 3 });
+        sprites_.push_back({ meteor.position, 8 * meteor.size_scale, 1, glow(1800) * 3 });
     if (!sprites_.empty()) {
         glBufferData(GL_ARRAY_BUFFER,
             GLsizeiptr(sprites_.size() * sizeof(Sprite)),

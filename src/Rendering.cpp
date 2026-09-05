@@ -308,29 +308,7 @@ Clouds::Clouds(const std::filesystem::path& directory, GLuint terrain_texture)
     for (GLuint texture : pressure_volumes_)
         allocate_volume(texture, GL_R16F, GL_RED);
     allocate_volume(divergence_volume_, GL_R16F, GL_RED);
-    glUseProgram(simulation_);
-    glUniform3i(glGetUniformLocation(simulation_, "volumeSize"),
-        simulation_x_,
-        simulation_y_,
-        simulation_z_);
-    uniform(simulation_, "windSpeed", 10.0f);
-    uniform(simulation_, "cloudBase", 290.0f);
-    uniform(simulation_, "cloudTop", 530.0f);
-    glActiveTexture(GL_TEXTURE4);
-    glBindTexture(GL_TEXTURE_2D, terrain_height_texture_);
-    glUniform1i(glGetUniformLocation(simulation_, "terrainHeight"), 4);
-    auto initialize = [&](GLuint density, GLuint velocity, GLuint scalar, int pass) {
-        glBindImageTexture(0, density, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
-        glBindImageTexture(1, velocity, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-        glBindImageTexture(2, scalar, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
-        glUniform1i(glGetUniformLocation(simulation_, "pass"), pass);
-        glDispatchCompute(
-            (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-    };
-    initialize(density_volumes_[0], velocity_volumes_[0], pressure_volumes_[0], 0);
-    initialize(density_volumes_[1], velocity_volumes_[1], pressure_volumes_[1], 0);
-    initialize(density_volumes_[0], velocity_volumes_[0], divergence_volume_, 6);
+    reset(10.0f, 290.0f, 530.0f);
 }
 
 Clouds::~Clouds() {
@@ -389,6 +367,37 @@ void Clouds::clear_density() {
     }
 }
 
+void Clouds::reset(float wind_speed, float cloud_base, float cloud_top) {
+    glUseProgram(simulation_);
+    glUniform3i(glGetUniformLocation(simulation_, "volumeSize"),
+        simulation_x_,
+        simulation_y_,
+        simulation_z_);
+    uniform(simulation_, "windSpeed", wind_speed);
+    uniform(simulation_, "cloudBase", cloud_base);
+    uniform(simulation_, "cloudTop", cloud_top);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, terrain_height_texture_);
+    glUniform1i(glGetUniformLocation(simulation_, "terrainHeight"), 4);
+    auto initialize = [&](GLuint density, GLuint velocity, GLuint scalar, int pass) {
+        glBindImageTexture(0, density, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glBindImageTexture(1, velocity, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+        glBindImageTexture(2, scalar, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glUniform1i(glGetUniformLocation(simulation_, "pass"), pass);
+        glDispatchCompute(
+            (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    };
+    initialize(density_volumes_[0], velocity_volumes_[0], pressure_volumes_[0], 0);
+    initialize(density_volumes_[1], velocity_volumes_[1], pressure_volumes_[1], 0);
+    initialize(density_volumes_[0], velocity_volumes_[0], divergence_volume_, 6);
+    density_index_ = 0;
+    velocity_index_ = 0;
+    pressure_index_ = 0;
+    simulation_accumulator_ = 0;
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void Clouds::update(double elapsed,
     float time,
     const std::vector<Volcanoes::Meteor>& meteors,
@@ -440,15 +449,17 @@ void Clouds::update(double elapsed,
         std::array<float, 32> velocities{};
         int meteor_count = 0;
         for (const auto& meteor : meteors) {
-            if (meteor_count >= 8 || meteor.position.y < cloud_base - 120.0f ||
-                meteor.position.y > cloud_top + 120.0f || std::abs(meteor.position.x) > 2320.0f ||
-                std::abs(meteor.position.z) > 2320.0f)
+            float cloud_force_radius = 120.0f * meteor.size_scale;
+            if (meteor_count >= 8 || meteor.position.y < cloud_base - cloud_force_radius ||
+                meteor.position.y > cloud_top + cloud_force_radius ||
+                std::abs(meteor.position.x) > 2200.0f + cloud_force_radius ||
+                std::abs(meteor.position.z) > 2200.0f + cloud_force_radius)
                 continue;
             size_t offset = size_t(meteor_count) * 4;
             positions[offset] = meteor.position.x;
             positions[offset + 1] = meteor.position.y;
             positions[offset + 2] = meteor.position.z;
-            positions[offset + 3] = 120.0f;
+            positions[offset + 3] = cloud_force_radius;
             velocities[offset] = meteor.velocity.x;
             velocities[offset + 1] = meteor.velocity.y;
             velocities[offset + 2] = meteor.velocity.z;

@@ -189,6 +189,29 @@ void Terrain::update_geometry() {
         GL_ARRAY_BUFFER, 0, GLsizeiptr(vertices_.size() * sizeof(Vertex)), vertices_.data());
 }
 
+bool Terrain::apply_height_deltas(const std::vector<int32_t>& deltas, float scale) {
+    if (deltas.size() != heights_.size())
+        throw std::runtime_error("Terrain delta size does not match the height field.");
+    if (pending_height_deltas_.empty())
+        pending_height_deltas_.resize(heights_.size());
+    bool changed = false;
+    for (size_t i = 0; i < heights_.size(); ++i) {
+        pending_height_deltas_[i] += double(deltas[i]) * double(scale);
+        if (pending_height_deltas_[i] == 0)
+            continue;
+        float updated = float(double(heights_[i]) + pending_height_deltas_[i]);
+        double applied = double(updated) - double(heights_[i]);
+        pending_height_deltas_[i] -= applied;
+        if (updated != heights_[i]) {
+            heights_[i] = updated;
+            changed = true;
+        }
+    }
+    if (changed)
+        update_geometry();
+    return changed;
+}
+
 void Terrain::deform(Vec3 center, float radius, float elevation) {
     for (size_t i = 0; i < vertices_.size(); ++i) {
         Vec3 p = vertices_[i].position;

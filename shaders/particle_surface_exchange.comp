@@ -1,0 +1,112 @@
+#version 430 core
+layout(local_size_x = 128) in;
+struct Particle { vec4 positionAge; vec4 velocityLife; vec4 data; };
+layout(std430,binding=0) buffer Particles { Particle particles[]; };
+layout(std430,binding=1) readonly buffer Previous { vec4 previous[]; };
+// x is carried material volume, yz is the last transport position, and w is
+// distance travelled since material was first picked up.
+layout(std430,binding=6) buffer SedimentStates { vec4 sedimentState[]; };
+layout(std430,binding=7) buffer TerrainDelta { int terrainDelta[]; };
+layout(std430,binding=2) buffer TerrainFlow { ivec4 terrainFlow[]; };
+uniform sampler2D terrainHeight;
+uniform uint capacity;
+uniform float dt;
+uniform float particleLifetime;
+uniform float terrainDeltaScale;
+uniform float erosionSpeed;
+const uint terrainSize=513u;
+const float terrainStep=2000.0/512.0;
+const float terrainCellArea=terrainStep*terrainStep;
+const float pi=3.14159265;
+const float erosionDelay=1.0;
+const float flowScale=4096.0;
+
+float heightAt(vec2 xz) { return texture(terrainHeight,xz/2000.0+0.5).r; }
+vec3 terrainNormal(vec2 xz) {
+    return normalize(vec3(heightAt(xz-vec2(terrainStep,0))-heightAt(xz+vec2(terrainStep,0)),
+        2.0*terrainStep,
+        heightAt(xz-vec2(0,terrainStep))-heightAt(xz+vec2(0,terrainStep))));
+}
+void exchangeTerrain(vec2 xz,float materialVolume) {
+    vec2 grid=clamp(xz/2000.0+0.5,vec2(0),vec2(1))*512.0;
+    float heightDelta=materialVolume/terrainCellArea;
+    ivec2 center=ivec2(round(grid));
+    float weights=0.0;
+    for(int z=-2;z<=2;++z) for(int x=-2;x<=2;++x) {
+        ivec2 cell=center+ivec2(x,z);
+        if(any(lessThan(cell,ivec2(0)))||
+            any(greaterThanEqual(cell,ivec2(int(terrainSize))))) continue;
+        weights+=exp(-0.5*float(x*x+z*z)/(1.15*1.15));
+    }
+    for(int z=-2;z<=2;++z) for(int x=-2;x<=2;++x) {
+        ivec2 cell=center+ivec2(x,z);
+        if(any(lessThan(cell,ivec2(0)))||
+            any(greaterThanEqual(cell,ivec2(int(terrainSize))))) continue;
+        float weight=exp(-0.5*float(x*x+z*z)/(1.15*1.15))/weights;
+        int delta=int(round(heightDelta*weight*terrainDeltaScale));
+        atomicAdd(terrainDelta[uint(cell.y)*terrainSize+uint(cell.x)],delta);
+    }
+}
+void main() {
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=capacity || particles[id].data.w<0.5) return;
+    uint flags=uint(particles[id].data.z);
+    float radius=max(0.65,particles[id].data.x*0.52);
+    // Particle radii are primarily visual, so only a small calibrated fraction is
+    // exchanged as terrain material.
+    float materialRadius=min(radius,1.5);
+    float materialVolume=0.02*(4.0/3.0)*pi
+        *materialRadius*materialRadius*materialRadius;
+
+    bool pendingDeposit=(flags&256u)!=0u;
+    bool pendingLava=(flags&512u)!=0u;
+    if(pendingDeposit) {
+        exchangeTerrain(particles[id].positionAge.xz,
+            sedimentState[id].x+(pendingLava?materialVolume:0.0));
+        sedimentState[id]=vec4(0.0);
+        if((flags&32u)!=0u)
+            particles[id].data.z=float(flags&~(256u|512u));
+        else
+            particles[id].data.w=0.0;
+        return;
+    }
+
+    // Newly emitted particles need time to leave their tightly concentrated
+    // source region before they are allowed to cut the terrain.
+    if(particles[id].positionAge.w<erosionDelay) return;
+
+    bool water=(flags&16u)!=0u;
+    bool lava=(flags&1u)!=0u&&(flags&(8u|16u|32u|64u))==0u;
+    if((flags&4u)==0u || (!water&&!lava)) return;
+    vec3 normal=terrainNormal(particles[id].positionAge.xz);
+    float separation=(particles[id].positionAge.y-heightAt(particles[id].positionAge.xz))*normal.y;
+    if(separation>radius+0.05) return;
+    // Pass 7 has already removed inward velocity and applied terrain friction.
+    // The reconstructed velocity in Previous still contains the impact and shear
+    // that produced that collision response.
+    vec3 velocity=previous[id].xyz;
+    float tangentialSpeed=length(velocity-normal*dot(velocity,normal));
+
+    if(water) {
+        vec2 grid=clamp(particles[id].positionAge.xz/2000.0+0.5,vec2(0),vec2(1))*512.0;
+        uvec2 cell=uvec2(round(grid));
+        uint index=cell.y*terrainSize+cell.x;
+        atomicAdd(terrainFlow[index].x,int(round(materialVolume*flowScale)));
+        atomicAdd(terrainFlow[index].y,int(round(materialVolume*velocity.x*flowScale)));
+        atomicAdd(terrainFlow[index].z,int(round(materialVolume*velocity.z*flowScale)));
+        atomicAdd(terrainFlow[index].w,
+            int(round(materialVolume*abs(velocity.y)*flowScale)));
+        return;
+    }
+
+    float heat=smoothstep(850.0,1450.0,particles[id].data.y);
+    float amount=materialVolume*(0.004*heat+0.001*tangentialSpeed*tangentialSpeed)
+        *dt*erosionSpeed;
+    exchangeTerrain(particles[id].positionAge.xz,-amount);
+    sedimentState[id].x+=amount;
+    if(particles[id].data.y<850.0 || particles[id].positionAge.w+dt>=particleLifetime) {
+        exchangeTerrain(particles[id].positionAge.xz,materialVolume+sedimentState[id].x);
+        sedimentState[id]=vec4(0.0);
+        particles[id].data.w=0.0;
+    }
+}

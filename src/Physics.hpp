@@ -10,6 +10,7 @@ public:
         Vec3 position;
         Vec3 velocity;
         float trail_emission = 0;
+        float size_scale = 1;
     };
 
 private:
@@ -30,16 +31,32 @@ private:
     struct GpuSimulation {
         static constexpr uint32_t capacity_ = 16000;
         static constexpr uint32_t buckets_ = 32768;
-        GLuint compute = 0;
+        static constexpr uint32_t terrain_size_ = Terrain::cell_count() + 1;
+        // Particle contributions are quantized individually before atomic addition.
+        // Nanometre-scale fixed point preserves slow-flow contributions until the
+        // asynchronous 100 ms batches are accumulated on the CPU.
+        static constexpr float terrain_delta_scale_ = 1000000000.0f;
+        struct ErosionReadback {
+            GLuint buffer = 0;
+            GLsync fence = nullptr;
+        };
+        std::array<GLuint, 12> compute{};
         GLuint terrain_texture = 0;
         std::array<GLuint, 6> buffers{};
+        GLuint sediment = 0;
+        GLuint terrain_delta = 0;
+        GLuint terrain_flow = 0;
+        std::array<ErosionReadback, 3> erosion_readbacks{};
         uint32_t cursor = 0;
         explicit GpuSimulation(const std::filesystem::path& directory, const Terrain& terrain);
         ~GpuSimulation();
         void upload_terrain(const Terrain& terrain);
         void spawn(const std::vector<GpuParticle>& records);
+        bool schedule_erosion_readback();
+        bool consume_erosion_readback(std::vector<int32_t>& deltas);
         void step(float dt,
             bool interactions,
+            float erosion_speed,
             float lifetime,
             float water_level,
             float wind_speed,
@@ -71,16 +88,18 @@ private:
     GLuint vbo_ = 0;
     GLuint blackbody_texture_ = 0;
     double accumulator_ = 0;
+    double erosion_readback_accumulator_ = 0;
     float emission_ = 0;
     float particle_lifetime_ = 33.0f;
     float particle_brightness_ = 1.0f;
+    float erosion_speed_ = 50.0f;
     bool particle_interactions_ = true;
     float range(float low, float high);
 
 public:
     explicit Volcanoes(const std::filesystem::path& directory, const Terrain& terrain);
     ~Volcanoes();
-    void launch_meteor(Vec3 target);
+    void launch_meteor(Vec3 target, float size_scale);
     void terrain_changed(Terrain& terrain);
     void add_volcano(Vec3 position);
     void add_spring(Vec3 position);
@@ -98,9 +117,11 @@ public:
     void set_particle_lifetime(float lifetime);
     float particle_brightness() const;
     void set_particle_brightness(float brightness);
+    float erosion_speed() const;
+    void set_erosion_speed(float speed);
     bool particle_interactions() const;
     void set_particle_interactions(bool enabled);
-    void impact(Terrain& terrain, Vec3 position);
+    void impact(Terrain& terrain, Vec3 position, float size_scale);
     void water_impact(Vec3 position);
     void lightning_water_impact(Vec3 position, size_t particle_count);
     void update(Terrain& terrain, double elapsed, float water_level, float wind_speed);

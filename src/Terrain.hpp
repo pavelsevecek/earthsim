@@ -16,6 +16,7 @@ class Terrain {
     static constexpr int cells_ = 512;
     static constexpr float step_ = 2000.0f / cells_;
     std::vector<float> heights_;
+    std::vector<double> pending_height_deltas_;
     std::vector<Vertex> vertices_;
     float min_height_ = 0;
     float max_height_ = 0;
@@ -28,6 +29,7 @@ public:
     explicit Terrain(uint32_t seed);
     ~Terrain();
     void update_geometry();
+    bool apply_height_deltas(const std::vector<int32_t>& deltas, float scale);
     void deform(Vec3 center, float radius, float elevation);
     void carve_crater(Vec3 center, float radius);
     bool segment_hit(Vec3 start, Vec3 end, Vec3& hit) const;

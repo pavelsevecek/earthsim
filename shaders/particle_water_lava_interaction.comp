@@ -1,0 +1,38 @@
+#version 430 core
+layout(local_size_x = 128) in;
+struct Particle { vec4 positionAge; vec4 velocityLife; vec4 data; };
+layout(std430,binding=0) buffer Particles { Particle particles[]; };
+layout(std430,binding=4) buffer Heads { int heads[]; };
+layout(std430,binding=5) buffer Next { int nextParticle[]; };
+uniform uint capacity;
+const float support=4.0;
+const uint bucketCount=32768u;
+
+ivec3 particleCell(vec3 p) { return ivec3(floor(p/support)); }
+uint hashCell(ivec3 c) { return (uint(c.x)*73856093u ^ uint(c.y)*19349663u ^ uint(c.z)*83492791u)&(bucketCount-1u); }
+void main() {
+    uint id=gl_GlobalInvocationID.x;
+    if(id>=capacity || particles[id].data.w<0.5) return;
+    uint flags=uint(particles[id].data.z);
+    if((flags&16u)==0u) return;
+    bool touchesLava=false;
+    ivec3 origin=particleCell(particles[id].positionAge.xyz);
+    for(int z=-1;z<=1 && !touchesLava;++z) for(int y=-1;y<=1 && !touchesLava;++y) for(int x=-1;x<=1 && !touchesLava;++x) {
+        ivec3 cell=origin+ivec3(x,y,z);
+        for(int j=heads[hashCell(cell)],guard=0;j>=0 && guard<512;j=nextParticle[j],++guard) {
+            if(uint(j)==id || any(notEqual(particleCell(particles[j].positionAge.xyz),cell))) continue;
+            uint otherFlags=uint(particles[j].data.z);
+            bool lava=(otherFlags&1u)!=0u && (otherFlags&(8u|16u|32u))==0u;
+            if(!lava) continue;
+            vec3 delta=particles[id].positionAge.xyz-particles[j].positionAge.xyz;
+            float contactRadius=0.5*(particles[id].data.x+particles[j].data.x);
+            if(dot(delta,delta)<=contactRadius*contactRadius) { touchesLava=true; break; }
+        }
+    }
+    if(touchesLava) {
+        particles[id].data.z=32.0;
+        particles[id].data.y=300.0;
+        particles[id].positionAge.w=0.0;
+        particles[id].velocityLife.xyz=vec3(0.0,6.0,0.0);
+    }
+}

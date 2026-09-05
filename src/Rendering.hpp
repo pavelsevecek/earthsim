@@ -117,6 +117,7 @@ public:
     GLuint scene_depth_texture() const;
     GLuint scene_emission_texture() const;
     void clear_density();
+    void reset(float wind_speed, float cloud_base, float cloud_top);
     void update(double elapsed,
         float time,
         const std::vector<Volcanoes::Meteor>& meteors,
