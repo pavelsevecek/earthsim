@@ -9,6 +9,7 @@ uniform vec3 sunDirection;
 uniform float daylight;
 uniform vec3 fogColor;
 uniform float atmosphereOpacity;
+uniform float time;
 out vec4 fragColor;
 uint starHash(uint value) {
     value ^= value >> 16u; value *= 0x7feb352du;
@@ -51,6 +52,56 @@ float fullSkyStars(vec3 direction) {
     }
     return light;
 }
+
+float auroraNoise(vec2 p) {
+    vec2 cell=floor(p),f=fract(p);
+    f=f*f*(3.0-2.0*f);
+    float a=starRandom(uint(cell.x+4096.0)+uint(cell.y+4096.0)*8192u);
+    float b=starRandom(uint(cell.x+4097.0)+uint(cell.y+4096.0)*8192u);
+    float c=starRandom(uint(cell.x+4096.0)+uint(cell.y+4097.0)*8192u);
+    float d=starRandom(uint(cell.x+4097.0)+uint(cell.y+4097.0)*8192u);
+    return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+
+float auroraFbm(vec2 p) {
+    float value=0.0;
+    value+=0.57*auroraNoise(p);
+    value+=0.28*auroraNoise(p*2.13+vec2(13.7,7.1));
+    value+=0.15*auroraNoise(p*4.37+vec2(31.9,19.3));
+    return value;
+}
+
+vec3 aurora(vec3 ray) {
+    // A fixed world-space magnetic north keeps the aurora attached to Earth
+    // while the celestial sphere turns through the day-night cycle.
+    float horizontal=max(length(ray.xz),0.0001);
+    float azimuth=atan(ray.x,ray.z);
+    float elevation=atan(ray.y,horizontal);
+    float north=smoothstep(-0.30,0.42,ray.z);
+    float vertical=smoothstep(0.015,0.12,ray.y)*(1.0-smoothstep(0.82,0.99,ray.y));
+
+    float drift=time*0.62;
+    float broadNoise=auroraFbm(vec2(azimuth*2.8+drift*0.21,elevation*3.2-drift*0.17));
+    float detailNoise=auroraFbm(vec2(azimuth*8.5-drift*0.34,elevation*7.0+drift*0.29));
+    float warp=0.55*sin(azimuth*2.7-drift*0.48)
+        +0.30*sin(azimuth*7.1+elevation*4.0+drift*0.73)
+        +(broadNoise-0.5)*2.3+(detailNoise-0.5)*0.85;
+    float phase=azimuth*10.0+warp+drift*0.16;
+    float fold0=sin(phase),fold1=sin(phase*0.73+1.8);
+    float curtain=exp(-38.0*fold0*fold0);
+    curtain+=0.62*exp(-52.0*fold1*fold1);
+    float rayNoise=auroraFbm(vec2(azimuth*21.0+drift*0.55,elevation*5.0-drift*0.43));
+    float fineRays=0.35+0.65*pow(0.5+0.5*sin(azimuth*91.0-elevation*7.0+drift*2.1+rayNoise*5.0),3.0);
+    float heightPulse=0.55+0.45*auroraFbm(vec2(elevation*8.0-drift*0.51,azimuth*5.0+drift*0.37));
+    float flicker=0.72+0.28*sin(drift*3.4+azimuth*17.0+detailNoise*8.0);
+    float intensity=curtain*fineRays*heightPulse*flicker*north*vertical;
+
+    float upper=smoothstep(0.28,0.78,ray.y);
+    vec3 lowerColor=vec3(0.05,1.15,0.42);
+    vec3 upperColor=vec3(0.48,0.12,0.95);
+    return mix(lowerColor,upperColor,upper)*intensity;
+}
+
 void main() {
     vec3 ray = normalize(cameraForward + tanHalfFov * (screen.x * aspect * cameraRight + screen.y * cameraUp));
     vec3 zenith = mix(vec3(0.002, 0.004, 0.015), vec3(0.055, 0.22, 0.48), daylight);
@@ -69,5 +120,7 @@ void main() {
     vec3 starRay = vec3(dot(ray, sunDirection), dot(ray, celestialUp), dot(ray, celestialPole));
     float starVisibility=exp(-10.0*daylight*atmosphereOpacity);
     color += vec3(fullSkyStars(starRay)) * starVisibility;
+    float auroraVisibility=pow(1.0-daylight,3.0)*smoothstep(0.03,0.30,atmosphereOpacity);
+    color += aurora(ray)*auroraVisibility;
     fragColor = vec4(max(color, vec3(0.0)), 1.0);
 }

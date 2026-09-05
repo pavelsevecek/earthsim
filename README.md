@@ -13,6 +13,11 @@ The sky, sunlight, twilight, moonlight, stars, and distance haze follow a contin
 day-night cycle: **one simulated day takes 60 real seconds at 1× speed**.
 Stars cover the full sky sphere and rotate with the sun and moon. Daylight and
 atmosphere opacity control their visibility; terrain and clouds still occlude them.
+At night, procedural aurora curtains shimmer around the northern sky. Broad
+animated folds, layered turbulent noise, fast rippling vertical rays, and changing intensity form green
+lower emissions that transition toward violet at high elevation. The aurora is
+fixed to world-space magnetic north, fades through twilight, disappears during
+the day, and feeds the existing HDR bloom pass. Terrain and clouds occlude it.
 Mountains cast shadows from both sunlight and moonlight, using two 2048² depth
 maps updated as the lights move. Filtered depth comparisons soften shadow edges;
 ambient lighting remains visible in shadow. Shadow coverage spans the entire
@@ -34,7 +39,17 @@ Repeat to add more. Placement uses the
 visible terrain depth, so the nearest mountain surface receives the source.
 Clicking empty sky keeps placement active. **Escape** or **Cancel placement**
 cancels; otherwise Escape exits. Right-drag rotation and scroll zoom remain
-available during placement. Vents and springs are session-only and are not saved on exit. Each vent
+available during placement. Vents and springs are session-only and are not saved on exit.
+
+**Terrain up** and **Terrain down** activate persistent sculpting tools. The
+**Terrain brush radius** slider adjusts their radius from 10 to 300 world units
+and defaults to 85. Each terrain click changes the center by 18 elevation units
+and tapers continuously to zero at the brush edge. The mesh heights,
+normals, particle collision texture, terrain bounds, and attached volcano and
+spring elevations update immediately. Escape or **Cancel placement** exits the
+active sculpting tool; terrain edits remain for the current session.
+
+Each vent
 continuously emits 90 hot particles per second as compact emissive disks.
 Placed sources sit 2 world units above the terrain. Each emitted particle is also
 raised beyond its slope-adjusted collision radius, preventing terrain projection
@@ -52,8 +67,38 @@ the day-night cycle, so water becomes almost black at night.
 A flat water plane spans the terrain and defaults to elevation 0. The **Water
 level** slider moves it from -100 to 250 world units. Terrain depth creates the
 visible shoreline, while transparency leaves submerged terrain visible. The plane
-uses the same upward-normal Fresnel sky reflection, sunlight highlight, daytime
-dimming, and atmospheric transmittance as water particles.
+uses a half-resolution HDR planar reflection rendered from a camera mirrored
+across the current water level. Reflected terrain is clipped at the water plane
+and reuses the primary terrain shadows and wetness data. The procedural sky,
+stars, sun, moon, and aurora are reflected directly. A small animated distortion
+breaks up the mirror image, Fresnel weighting strengthens reflections at grazing
+angles, and the procedural sky remains as a fallback near reflection-texture
+edges. Water particles sample the same planar reflection using their fixed upward
+normal. Active lightning channels are drawn again with the mirrored camera,
+clipped at the water surface, and retain their HDR intensity so their reflections
+feed bloom. Particle simulation is not repeated; rain and particle geometry reuse
+their existing simulation state. Lava, water, vapor,
+meteor bodies and trails, rain streaks, rain vapor, and ripples are drawn with the
+mirrored camera and clipped at the water surface. Water particles use their
+procedural sky fallback during capture to avoid reading from the reflection target
+while it is being written. Volumetric clouds remain omitted from the reflected
+render to keep its cost bounded.
+Water transparency uses the full unpolarized dielectric Fresnel equations with
+an air refractive index of 1.0 and water refractive index of 1.333. The interface
+therefore reflects about 2% at normal incidence and approaches complete reflection
+at grazing angles. Views from below also account for total internal reflection.
+Fresnel reflection is combined with Beer-Lambert-style transmission loss and
+blue in-scattering through an approximate water column. This keeps the interface
+physics intact while making the deep water plane mostly blue during daylight;
+water particles use a thinner optical column and remain more transparent.
+Procedural shoreline foam follows the live GPU terrain-height texture, including
+sculpted terrain and meteor craters. A shallow-depth band combines two scales of
+advected noise with moving wave fronts, producing broken white foam that becomes
+denser and more opaque near contact while remaining dimly moonlit at night.
+When a particle crosses below the adjustable water level, spring-water particles
+merge into the water body and disappear. Lava and meteor-impact ejecta instead
+convert immediately into white, rising vapor; their vapor age restarts at the
+moment of conversion and they leave the fluid solver.
 When a water particle touches a lava particle, the GPU spatial-hash pass converts
 the water into vapor. Vapor is white and semi-transparent, expands as it ages,
 and rises vertically at a constant 6 units per simulation second. It expands by
@@ -221,6 +266,9 @@ to the console with the shader name and driver log. The working directory's
 
 ## Controls
 
+- EarthSim starts fullscreen on the primary monitor at its current resolution
+  and refresh rate.
+- **Quit:** the button in the upper-right corner closes EarthSim.
 - **Left mouse drag:** pan the camera.
 - **Left mouse double-click:** set the camera target to the visible terrain point.
 - **Right mouse drag:** rotate around the current camera target.
@@ -236,7 +284,11 @@ threshold, so precipitation tracks the visible cloud field.
 The particle-life slider sets the lifetime of both existing and new particles
 in simulation seconds. Shortening it removes particles already older than the
 new limit on the next simulation step. Cooling rates are independent of this setting.
-Time speed ranges from 0× (paused) to 4×, with 1× as the default. It scales the
+The **Time of day** slider directly edits the 24-hour day-night phase. The clock
+continues advancing from the selected time when simulation time is running and
+holds the selected time while paused, without changing particle ages, physics,
+cloud positions, or weather animation state. Time speed ranges from 0× (paused)
+to 4×, with 1× as the default. It scales the
 day-night cycle, cloud drift, particle motion, emission, cooling, and lifetimes
 together. Camera controls remain responsive while paused. Changing speed preserves
 the current simulation time without jumping to a different time of day.

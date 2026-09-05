@@ -5,10 +5,14 @@ uniform mat4 viewProjection;
 uniform vec3 eye;
 uniform vec3 cameraRight;
 uniform vec3 cameraUp;
+uniform bool clipEnabled;
+uniform float clipHeight;
+uniform float clipDirection;
 out vec2 local;
 out float age;
 flat out int particleState;
 void main() {
+    gl_ClipDistance[0]=1.0;
     const vec2 corners[6]=vec2[6](vec2(0,-1),vec2(1,-1),vec2(1,1),
         vec2(0,-1),vec2(1,1),vec2(0,1));
     RainDrop drop=drops[gl_InstanceID];
@@ -34,5 +38,6 @@ void main() {
         float radius=0.5+age*5.5;
         world=drop.positionAge.xyz+vec3(corner.x*radius,0.03,corner.y*radius);
     }
+    gl_ClipDistance[0]=clipEnabled?(world.y-clipHeight)*clipDirection:1.0;
     gl_Position=viewProjection*vec4(world,1.0);
 }

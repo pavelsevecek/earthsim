@@ -13,6 +13,7 @@ uniform uint capacity;
 uniform float dt;
 uniform bool interactions;
 uniform float particleLifetime;
+uniform float waterLevel;
 const float support=4.0;
 const float restDensity=1.0/(1.5*1.5*1.5);
 const uint bucketCount=32768u;
@@ -77,6 +78,20 @@ void main() {
         } else if((flags&1u)!=0u) particles[id].velocityLife.y-=12.0*dt;
         particles[id].positionAge.xyz+=particles[id].velocityLife.xyz*dt;
         if((flags&4u)!=0u) projectTerrain(particles[id].positionAge.xyz,max(0.65,particles[id].data.x*0.52));
+        if(particles[id].positionAge.y<=waterLevel) {
+            if((flags&16u)!=0u) {
+                // Spring water merges into the flat water body.
+                particles[id].data.w=0.0;
+                return;
+            }
+            bool lava=(flags&1u)!=0u&&(flags&(8u|32u))==0u;
+            if(lava) {
+                particles[id].data.z=32.0;
+                particles[id].data.y=300.0;
+                particles[id].positionAge.w=0.0;
+                particles[id].velocityLife.xyz=vec3(0.0,6.0,0.0);
+            }
+        }
     } else if(pass==2) {
         if((uint(particles[id].data.z)&2u)==0u) return;
         ivec3 c=particleCell(particles[id].positionAge.xyz); nextParticle[id]=atomicExchange(heads[hashCell(c)],int(id));

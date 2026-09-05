@@ -13,6 +13,9 @@ uniform int renderMode;
 uniform float particleLifetime;
 uniform sampler1D blackbodyColors;
 uniform mat4 lightViewProjection;
+uniform bool clipEnabled;
+uniform float clipHeight;
+uniform float clipDirection;
 out vec2 local;
 out vec3 radiance;
 out float opacity;
@@ -20,9 +23,12 @@ out float distanceToEye;
 out float emissiveFactor;
 out float waterFactor;
 out float vaporFactor;
+out float trailFactor;
 out vec3 directionToEye;
 out vec4 shadowPosition;
+out vec3 particleCenter;
 void main() {
+    gl_ClipDistance[0]=1.0;
     const vec2 corners[6] = vec2[6](vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,-1), vec2(1,1), vec2(-1,1));
     local = corners[gl_VertexID];
     vec3 center=position;
@@ -32,6 +38,7 @@ void main() {
     emissiveFactor=1.0;
     waterFactor=0.0;
     vaporFactor=0.0;
+    trailFactor=0.0;
     if(gpuParticles) {
         Particle particle=particles[gl_InstanceID];
         bool trail=(uint(particle.data.z)&8u)!=0u;
@@ -49,8 +56,9 @@ void main() {
         float sizeScale=trail?(1.0+2.0*normalizedAge):(vapor?(1.0+min(particle.positionAge.w*0.08,2.0)):1.0);
         size=particle.data.x*sizeScale;
         float ageFade=1.0-smoothstep(0.8,1.0,normalizedAge);
-        opacity=trail?pow(1.0-normalizedAge,2.0):(water?0.52*ageFade:ageFade);
+        opacity=trail?pow(1.0-normalizedAge,2.0):ageFade;
         if(trail) {
+            trailFactor=1.0;
             float colorFade=smoothstep(0.12,0.92,normalizedAge);
             radiance=mix(vec3(0.002,0.85,1.0),vec3(1.0,0.004,0.001),colorFade);
         } else if(water) {
@@ -68,8 +76,10 @@ void main() {
         }
     }
     distanceToEye = length(center - eye);
+    particleCenter=center;
     directionToEye=normalize(eye-center);
     vec3 world = center + (cameraRight * local.x + cameraUp * local.y) * size * 0.5;
+    gl_ClipDistance[0]=clipEnabled?(world.y-clipHeight)*clipDirection:1.0;
     shadowPosition=lightViewProjection*vec4(world,1.0);
     gl_Position = viewProjection * vec4(world, 1.0);
 }
