@@ -103,10 +103,14 @@ public:
     void terrain_changed(Terrain& terrain);
     void add_volcano(Vec3 position);
     void add_spring(Vec3 position);
+    void remove_lava_source(size_t index);
+    void remove_spring_source(size_t index);
     void add_tornado(Vec3 position, Vec3 direction_point, float water_level);
     size_t volcano_count() const;
     size_t spring_count() const;
     size_t tornado_count() const;
+    const std::vector<Vec3>& lava_sources() const;
+    const std::vector<Vec3>& spring_sources() const;
     const std::vector<Meteor>& meteors() const;
     GLuint terrain_texture() const;
     GLuint particle_buffer() const;

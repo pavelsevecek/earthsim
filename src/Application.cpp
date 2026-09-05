@@ -5,6 +5,72 @@
 #include <imgui_impl_opengl3.h>
 
 namespace earth_sim {
+namespace {
+bool world_to_screen(Vec3 position,
+    Vec3 eye,
+    Vec3 forward,
+    Vec3 right,
+    Vec3 up,
+    ImVec2 display_size,
+    ImVec2& screen) {
+    Vec3 relative = position - eye;
+    float depth = dot(relative, forward);
+    if (depth <= 0.01f)
+        return false;
+
+    constexpr float tan_half_fov = 0.41421356237f;
+    float half_height = std::max(display_size.y * 0.5f, 1.0f);
+    float focal_length = half_height / tan_half_fov;
+    screen = { display_size.x * 0.5f + dot(relative, right) * focal_length / depth,
+        display_size.y * 0.5f - dot(relative, up) * focal_length / depth };
+    return screen.x >= 0 && screen.x <= display_size.x && screen.y >= 0 &&
+           screen.y <= display_size.y;
+}
+
+ImVec2 source_marker_center(ImVec2 anchor) {
+    return { anchor.x, anchor.y - 12.0f * ui_scale };
+}
+
+void draw_source_marker(ImDrawList* draw_list, ImVec2 anchor, bool spring, bool selected) {
+    float scale = ui_scale;
+    float radius = 8.0f * scale;
+    ImVec2 center = source_marker_center(anchor);
+    ImU32 shadow = IM_COL32(0, 0, 0, 150);
+    ImU32 fill = spring ? IM_COL32(35, 164, 230, 245) : IM_COL32(235, 82, 30, 245);
+    ImU32 accent = spring ? IM_COL32(225, 249, 255, 255) : IM_COL32(255, 220, 70, 255);
+
+    draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 5.0f * scale },
+        { center.x + 4.0f * scale, center.y + 5.0f * scale },
+        { anchor.x, anchor.y + 2.0f * scale },
+        shadow);
+    draw_list->AddCircleFilled({ center.x + scale, center.y + scale }, radius, shadow, 16);
+    draw_list->AddTriangleFilled({ center.x - 3.5f * scale, center.y + 5.0f * scale },
+        { center.x + 3.5f * scale, center.y + 5.0f * scale },
+        anchor,
+        fill);
+    draw_list->AddCircleFilled(center, radius, fill, 16);
+
+    if (spring) {
+        for (int row = -1; row <= 1; ++row) {
+            float y = center.y + row * 3.0f * scale;
+            draw_list->AddLine({ center.x - 4.5f * scale, y },
+                { center.x + 4.5f * scale, y },
+                accent,
+                1.2f * scale);
+        }
+    } else {
+        ImVec2 flame_center{ center.x, center.y + 1.5f * scale };
+        draw_list->AddTriangleFilled({ center.x - 4.0f * scale, center.y + 4.0f * scale },
+            { center.x + 4.0f * scale, center.y + 4.0f * scale },
+            { center.x + 1.0f * scale, center.y - 5.0f * scale },
+            accent);
+        draw_list->AddCircleFilled(flame_center, 3.7f * scale, accent, 12);
+    }
+    if (selected)
+        draw_list->AddCircle(center, radius + 2.0f * scale, IM_COL32_WHITE, 20, 2.0f * scale);
+}
+} // namespace
+
 class AppState {
     GLFWwindow* window_;
     std::filesystem::path directory_;
@@ -38,6 +104,7 @@ class AppState {
     bool particle_simulation_enabled_ = true;
     bool bloom_enabled_ = true;
     bool ssgi_enabled_ = false;
+    bool source_icons_visible_ = true;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
     bool day_night_paused_ = false;
@@ -55,7 +122,10 @@ class AppState {
         TerrainUp,
         TerrainDown
     };
+    enum class SourceType { None, Lava, Spring };
     PlacementTool placement_ = PlacementTool::None;
+    SourceType selected_source_type_ = SourceType::None;
+    size_t selected_source_index_ = 0;
     Vec3 tornado_origin_{};
     bool placement_miss_ = false;
     float terrain_brush_radius_ = 85.0f;
@@ -173,6 +243,43 @@ void AppState::frame() {
                   up * (io.MouseDelta.y * units_per_pixel);
     }
     Vec3 eye = target_ + orbit * distance_;
+    if (source_icons_visible_ && placement_ == PlacementTool::None && !io.WantCaptureMouse &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        SourceType closest_type = SourceType::None;
+        size_t closest_index = 0;
+        float closest_distance_squared = std::pow(11.0f * ui_scale, 2.0f);
+        auto consider_sources = [&](const std::vector<Vec3>& sources, SourceType type) {
+            for (size_t i = 0; i < sources.size(); ++i) {
+                ImVec2 anchor;
+                if (!world_to_screen(sources[i], eye, forward, right, up, io.DisplaySize, anchor))
+                    continue;
+                ImVec2 center = source_marker_center(anchor);
+                float dx = io.MousePos.x - center.x;
+                float dy = io.MousePos.y - center.y;
+                float distance_squared = dx * dx + dy * dy;
+                if (distance_squared <= closest_distance_squared) {
+                    closest_distance_squared = distance_squared;
+                    closest_type = type;
+                    closest_index = i;
+                }
+            }
+        };
+        consider_sources(volcanoes_.lava_sources(), SourceType::Lava);
+        consider_sources(volcanoes_.spring_sources(), SourceType::Spring);
+        selected_source_type_ = closest_type;
+        selected_source_index_ = closest_index;
+        if (closest_type != SourceType::None) {
+            panning_ = false;
+            target_click = false;
+        }
+    }
+    if (!io.WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+        if (selected_source_type_ == SourceType::Lava)
+            volcanoes_.remove_lava_source(selected_source_index_);
+        else if (selected_source_type_ == SourceType::Spring)
+            volcanoes_.remove_spring_source(selected_source_index_);
+        selected_source_type_ = SourceType::None;
+    }
     double wrapped_day = std::fmod(day_time_ / 60.0 + day_phase_offset_, 1.0);
     if (wrapped_day < 0.0)
         wrapped_day += 1.0;
@@ -443,6 +550,28 @@ void AppState::frame() {
         framebuffer_width,
         framebuffer_height);
 
+    if (source_icons_visible_) {
+        ImDrawList* source_icons = ImGui::GetBackgroundDrawList();
+        for (size_t i = 0; i < volcanoes_.lava_sources().size(); ++i) {
+            ImVec2 screen;
+            if (world_to_screen(
+                    volcanoes_.lava_sources()[i], eye, forward, right, up, io.DisplaySize, screen))
+                draw_source_marker(source_icons,
+                    screen,
+                    false,
+                    selected_source_type_ == SourceType::Lava && selected_source_index_ == i);
+        }
+        for (size_t i = 0; i < volcanoes_.spring_sources().size(); ++i) {
+            ImVec2 screen;
+            if (world_to_screen(
+                    volcanoes_.spring_sources()[i], eye, forward, right, up, io.DisplaySize, screen))
+                draw_source_marker(source_icons,
+                    screen,
+                    true,
+                    selected_source_type_ == SourceType::Spring && selected_source_index_ == i);
+        }
+    }
+
     ImGui::SetNextWindowPos(ImVec2(20 * ui_scale, 20 * ui_scale), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.78f);
     ImGui::Begin("EarthSim",
@@ -481,6 +610,8 @@ void AppState::frame() {
     ImGui::Text("Active volcanoes: %d", int(volcanoes_.volcano_count()));
     ImGui::Text("Active springs: %d", int(volcanoes_.spring_count()));
     ImGui::Text("Active tornadoes: %d", int(volcanoes_.tornado_count()));
+    if (ImGui::Button(source_icons_visible_ ? "Hide source icons" : "Show source icons"))
+        source_icons_visible_ = !source_icons_visible_;
     if (ImGui::Button("Create volcano")) {
         placement_ = PlacementTool::Volcano;
         placement_miss_ = false;

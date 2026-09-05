@@ -375,6 +375,16 @@ void Volcanoes::add_spring(Vec3 position) {
     springs_.push_back(position);
 }
 
+void Volcanoes::remove_lava_source(size_t index) {
+    if (index < vents_.size())
+        vents_.erase(vents_.begin() + index);
+}
+
+void Volcanoes::remove_spring_source(size_t index) {
+    if (index < springs_.size())
+        springs_.erase(springs_.begin() + index);
+}
+
 void Volcanoes::add_tornado(Vec3 position, Vec3 direction_point, float water_level) {
     Vec3 direction{ direction_point.x - position.x, 0, direction_point.z - position.z };
     float direction_length = std::sqrt(dot(direction, direction));
@@ -423,6 +433,14 @@ size_t Volcanoes::spring_count() const {
 
 size_t Volcanoes::tornado_count() const {
     return tornadoes_.size();
+}
+
+const std::vector<Vec3>& Volcanoes::lava_sources() const {
+    return vents_;
+}
+
+const std::vector<Vec3>& Volcanoes::spring_sources() const {
+    return springs_;
 }
 
 const std::vector<Volcanoes::Meteor>& Volcanoes::meteors() const {
