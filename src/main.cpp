@@ -2765,17 +2765,20 @@ void run(GLFWwindow* window, const std::filesystem::path& directory) {
             "Drag left mouse to pan\nDouble-click terrain to focus\nDrag right mouse to "
             "rotate\nScroll to zoom\nEsc to exit");
         ImGui::End();
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 20.0f * uiScale, 20.0f * uiScale),
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x, 0.0f),
             ImGuiCond_Always,
             ImVec2(1.0f, 0.0f));
         ImGui::SetNextWindowBgAlpha(0.78f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
         ImGui::Begin("EarthSim quit",
             nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-        if (ImGui::Button("Quit", ImVec2(72.0f * uiScale, 0.0f)))
+        if (ImGui::Button("X", ImVec2(36.0f * uiScale, 30.0f * uiScale)))
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         ImGui::End();
+        ImGui::PopStyleVar(2);
         ImGui::Render();
         ui.draw(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
         glfwSwapBuffers(window);
