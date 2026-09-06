@@ -1,6 +1,8 @@
 # EarthSim
 
-EarthSim is a C++17/OpenGL 4.3 terrain and weather simulator. It renders procedurally generated mountain ranges, water, volumetric clouds, particle-based lava and rain, meteors, lightning, atmospheric effects, and a day-night cycle. GLFW, GLEW, and Dear ImGui are included under `externals`.
+EarthSim is a C++17/OpenGL 4.3 terrain and weather simulator. It renders procedurally generated mountain ranges, water, volumetric weather and explosion clouds, particle-based lava and rain, meteors, lightning, atmospheric effects, and a day-night cycle. Explosion plumes use a localized GPU fluid volume for buoyant smoke, heat, wind advection, and a rolling mushroom-cloud cap. GLFW, GLEW, and Dear ImGui are included under `externals`.
+
+Use **Explosion**, choose an **Explosion size**, and click the terrain to create a crater, ejecta, an expanding blast shell, and a simulated plume. The current implementation keeps one high-resolution plume active at a time; a new explosion replaces the previous plume.
 
 ## Build
 

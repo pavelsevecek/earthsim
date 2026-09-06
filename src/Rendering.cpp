@@ -791,6 +791,273 @@ void Clouds::draw(Vec3 eye,
     glActiveTexture(GL_TEXTURE0);
 }
 
+ExplosionClouds::ExplosionClouds(
+    const std::filesystem::path& directory, GLuint terrain_texture)
+    : terrain_height_texture_(terrain_texture) {
+    simulation_ = compute_program(directory, "explosion_sim");
+    try {
+        shader_ = program(directory, "explosion");
+    } catch (...) {
+        glDeleteProgram(simulation_);
+        throw;
+    }
+    glGenVertexArrays(1, &vao_);
+    glGenTextures(2, smoke_volumes_.data());
+    glGenTextures(2, temperature_volumes_.data());
+    glGenTextures(2, velocity_volumes_.data());
+    glGenTextures(2, pressure_volumes_.data());
+    glGenTextures(1, &divergence_volume_);
+    auto allocate = [&](GLuint texture, GLint format, GLenum components) {
+        glBindTexture(GL_TEXTURE_3D, texture);
+        glTexImage3D(GL_TEXTURE_3D,
+            0,
+            format,
+            simulation_x_,
+            simulation_y_,
+            simulation_z_,
+            0,
+            components,
+            GL_FLOAT,
+            nullptr);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    };
+    for (GLuint texture : smoke_volumes_)
+        allocate(texture, GL_R16F, GL_RED);
+    for (GLuint texture : temperature_volumes_)
+        allocate(texture, GL_R16F, GL_RED);
+    for (GLuint texture : velocity_volumes_)
+        allocate(texture, GL_RGBA16F, GL_RGBA);
+    for (GLuint texture : pressure_volumes_)
+        allocate(texture, GL_R16F, GL_RED);
+    allocate(divergence_volume_, GL_R16F, GL_RED);
+}
+
+ExplosionClouds::~ExplosionClouds() {
+    glDeleteTextures(2, smoke_volumes_.data());
+    glDeleteTextures(2, temperature_volumes_.data());
+    glDeleteTextures(2, velocity_volumes_.data());
+    glDeleteTextures(2, pressure_volumes_.data());
+    glDeleteTextures(1, &divergence_volume_);
+    glDeleteProgram(simulation_);
+    glDeleteProgram(shader_);
+    glDeleteVertexArrays(1, &vao_);
+}
+
+void ExplosionClouds::initialize() {
+    glUseProgram(simulation_);
+    glUniform3i(glGetUniformLocation(simulation_, "volumeSize"),
+        simulation_x_,
+        simulation_y_,
+        simulation_z_);
+    uniform(simulation_, "boxMin", box_min_);
+    uniform(simulation_, "boxMax", box_max_);
+    uniform(simulation_, "strength", strength_);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, terrain_height_texture_);
+    glUniform1i(glGetUniformLocation(simulation_, "terrainHeight"), 5);
+    glUniform1i(glGetUniformLocation(simulation_, "pass"), 0);
+    for (size_t i = 0; i < smoke_volumes_.size(); ++i) {
+        glBindImageTexture(0, velocity_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+        glBindImageTexture(1, smoke_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glBindImageTexture(
+            2, temperature_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glBindImageTexture(3, pressure_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glDispatchCompute(
+            (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    }
+    glBindImageTexture(3, divergence_volume_, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+    glDispatchCompute(
+        (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void ExplosionClouds::explode(Vec3 position, float strength) {
+    strength_ = std::clamp(strength, 0.25f, 5.0f);
+    float horizontal_extent = 180.0f * strength_;
+    float vertical_extent = 520.0f * strength_;
+    box_min_ = { position.x - horizontal_extent, position.y - 4.0f, position.z - horizontal_extent };
+    box_max_ = { position.x + horizontal_extent,
+        position.y + vertical_extent,
+        position.z + horizontal_extent };
+    age_ = 0.0f;
+    accumulator_ = 0.0;
+    scalar_index_ = 0;
+    velocity_index_ = 0;
+    pressure_index_ = 0;
+    active_ = true;
+    initialize();
+}
+
+void ExplosionClouds::clear() {
+    active_ = false;
+    age_ = 0.0f;
+    accumulator_ = 0.0;
+}
+
+bool ExplosionClouds::active() const {
+    return active_;
+}
+
+void ExplosionClouds::update(double elapsed, float wind_speed, Vec3 wind_direction) {
+    if (!active_)
+        return;
+    constexpr float step = 1.0f / 20.0f;
+    accumulator_ += elapsed;
+    while (accumulator_ >= step) {
+        accumulator_ -= step;
+        age_ += step;
+        if (age_ >= 90.0f) {
+            active_ = false;
+            break;
+        }
+        glUseProgram(simulation_);
+        glUniform3i(glGetUniformLocation(simulation_, "volumeSize"),
+            simulation_x_,
+            simulation_y_,
+            simulation_z_);
+        uniform(simulation_, "boxMin", box_min_);
+        uniform(simulation_, "boxMax", box_max_);
+        uniform(simulation_, "dt", step);
+        uniform(simulation_, "age", age_);
+        uniform(simulation_, "strength", strength_);
+        uniform(simulation_, "windSpeed", wind_speed);
+        glUniform2f(glGetUniformLocation(simulation_, "windDirection"),
+            wind_direction.x,
+            wind_direction.z);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, terrain_height_texture_);
+        glUniform1i(glGetUniformLocation(simulation_, "terrainHeight"), 5);
+        auto source = [&](int unit, const char* name, GLuint texture) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_3D, texture);
+            glUniform1i(glGetUniformLocation(simulation_, name), unit);
+        };
+        auto run = [&](int pass, GLuint velocity, GLuint smoke, GLuint temperature, GLuint scalar) {
+            glBindImageTexture(0, velocity, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glBindImageTexture(1, smoke, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+            glBindImageTexture(2, temperature, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+            glBindImageTexture(3, scalar, 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+            glUniform1i(glGetUniformLocation(simulation_, "pass"), pass);
+            glDispatchCompute(
+                (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+        };
+        source(0, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
+        source(1, "smokeTexture", smoke_volumes_[size_t(scalar_index_)]);
+        source(2, "temperatureTexture", temperature_volumes_[size_t(scalar_index_)]);
+        int advected_velocity = 1 - velocity_index_;
+        run(1,
+            velocity_volumes_[size_t(advected_velocity)],
+            smoke_volumes_[size_t(1 - scalar_index_)],
+            temperature_volumes_[size_t(1 - scalar_index_)],
+            divergence_volume_);
+        velocity_index_ = advected_velocity;
+        source(0, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
+        run(2,
+            velocity_volumes_[size_t(1 - velocity_index_)],
+            smoke_volumes_[size_t(1 - scalar_index_)],
+            temperature_volumes_[size_t(1 - scalar_index_)],
+            divergence_volume_);
+        source(3, "divergenceTexture", divergence_volume_);
+        for (int iteration = 0; iteration < 14; ++iteration) {
+            source(4, "pressureTexture", pressure_volumes_[size_t(pressure_index_)]);
+            int next_pressure = 1 - pressure_index_;
+            run(3,
+                velocity_volumes_[size_t(1 - velocity_index_)],
+                smoke_volumes_[size_t(1 - scalar_index_)],
+                temperature_volumes_[size_t(1 - scalar_index_)],
+                pressure_volumes_[size_t(next_pressure)]);
+            pressure_index_ = next_pressure;
+        }
+        source(0, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
+        source(4, "pressureTexture", pressure_volumes_[size_t(pressure_index_)]);
+        int projected_velocity = 1 - velocity_index_;
+        run(4,
+            velocity_volumes_[size_t(projected_velocity)],
+            smoke_volumes_[size_t(1 - scalar_index_)],
+            temperature_volumes_[size_t(1 - scalar_index_)],
+            divergence_volume_);
+        velocity_index_ = projected_velocity;
+        source(0, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
+        source(1, "smokeTexture", smoke_volumes_[size_t(scalar_index_)]);
+        source(2, "temperatureTexture", temperature_volumes_[size_t(scalar_index_)]);
+        int next_scalar = 1 - scalar_index_;
+        run(5,
+            velocity_volumes_[size_t(1 - velocity_index_)],
+            smoke_volumes_[size_t(next_scalar)],
+            temperature_volumes_[size_t(next_scalar)],
+            divergence_volume_);
+        scalar_index_ = next_scalar;
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void ExplosionClouds::draw(GLuint destination,
+    GLuint scene_depth,
+    int width,
+    int height,
+    Vec3 eye,
+    Vec3 forward,
+    Vec3 right,
+    Vec3 up,
+    Vec3 sun,
+    float daylight,
+    float atmosphere_opacity,
+    float distance) {
+    if (!active_)
+        return;
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    // The plume samples scene depth while blending into scene color. Detach the
+    // depth texture during the draw to avoid an OpenGL framebuffer feedback loop.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glViewport(0, 0, width, height);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(shader_);
+    glBindVertexArray(vao_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, scene_depth);
+    glUniform1i(glGetUniformLocation(shader_, "sceneDepth"), 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, smoke_volumes_[size_t(scalar_index_)]);
+    glUniform1i(glGetUniformLocation(shader_, "smokeTexture"), 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_3D, temperature_volumes_[size_t(scalar_index_)]);
+    glUniform1i(glGetUniformLocation(shader_, "temperatureTexture"), 2);
+    uniform(shader_, "boxMin", box_min_);
+    uniform(shader_, "boxMax", box_max_);
+    uniform(shader_, "eye", eye);
+    uniform(shader_, "cameraForward", forward);
+    uniform(shader_, "cameraRight", right);
+    uniform(shader_, "cameraUp", up);
+    uniform(shader_, "sunDirection", sun);
+    uniform(shader_, "daylight", daylight);
+    uniform(shader_, "atmosphereOpacity", atmosphere_opacity);
+    uniform(shader_, "age", age_);
+    uniform(shader_, "strength", strength_);
+    uniform(shader_, "aspect", float(width) / height);
+    uniform(shader_, "tanHalfFov", std::tan(pi / 8));
+    Mat4 projection = perspective(float(width) / height, distance);
+    glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, scene_depth, 0);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glActiveTexture(GL_TEXTURE0);
+}
+
 ScreenSpaceGI::ScreenSpaceGI(const std::filesystem::path& directory) {
     shader_ = program(directory, "ssgi");
     try {

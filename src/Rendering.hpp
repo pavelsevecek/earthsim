@@ -166,6 +166,52 @@ public:
         GLuint destination);
 };
 
+class ExplosionClouds {
+    static constexpr int simulation_x_ = 64;
+    static constexpr int simulation_y_ = 96;
+    static constexpr int simulation_z_ = 64;
+    GLuint simulation_ = 0;
+    GLuint shader_ = 0;
+    GLuint vao_ = 0;
+    GLuint terrain_height_texture_ = 0;
+    std::array<GLuint, 2> smoke_volumes_{};
+    std::array<GLuint, 2> temperature_volumes_{};
+    std::array<GLuint, 2> velocity_volumes_{};
+    std::array<GLuint, 2> pressure_volumes_{};
+    GLuint divergence_volume_ = 0;
+    int scalar_index_ = 0;
+    int velocity_index_ = 0;
+    int pressure_index_ = 0;
+    Vec3 box_min_{};
+    Vec3 box_max_{};
+    float age_ = 0.0f;
+    float strength_ = 1.0f;
+    double accumulator_ = 0.0;
+    bool active_ = false;
+
+    void initialize();
+
+public:
+    explicit ExplosionClouds(const std::filesystem::path& directory, GLuint terrain_texture);
+    ~ExplosionClouds();
+    void explode(Vec3 position, float strength);
+    void clear();
+    void update(double elapsed, float wind_speed, Vec3 wind_direction);
+    void draw(GLuint destination,
+        GLuint scene_depth,
+        int width,
+        int height,
+        Vec3 eye,
+        Vec3 forward,
+        Vec3 right,
+        Vec3 up,
+        Vec3 sun,
+        float daylight,
+        float atmosphere_opacity,
+        float distance);
+    bool active() const;
+};
+
 class ScreenSpaceGI {
     GLuint shader_ = 0;
     GLuint composite_ = 0;

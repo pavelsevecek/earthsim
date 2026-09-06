@@ -81,6 +81,7 @@ class AppState {
     Volcanoes volcanoes_;
     Lightning lightning_;
     Clouds clouds_;
+    ExplosionClouds explosions_;
     Rain rain_;
     TerrainShadows shadows_;
     ScreenSpaceGI screen_space_gi_;
@@ -102,6 +103,7 @@ class AppState {
     float bloom_intensity_ = 0.15f;
     bool clouds_enabled_ = true;
     bool cloud_simulation_enabled_ = true;
+    bool explosion_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
     bool water_simulation_enabled_ = true;
     bool bloom_enabled_ = true;
@@ -111,6 +113,7 @@ class AppState {
     float day_phase_offset_ = 0.34f;
     bool day_night_paused_ = false;
     float meteor_size_ = 1.0f;
+    float explosion_size_ = 1.0f;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
@@ -119,6 +122,7 @@ class AppState {
         Volcano,
         Spring,
         Meteor,
+        Explosion,
         TornadoOrigin,
         TornadoDirection,
         TerrainUp,
@@ -152,6 +156,7 @@ public:
         , volcanoes_(directory_, terrain_)
         , lightning_(directory_)
         , clouds_(directory_, volcanoes_.terrain_texture())
+        , explosions_(directory_, volcanoes_.terrain_texture())
         , rain_(directory_)
         , shadows_(directory_)
         , screen_space_gi_(directory_)
@@ -195,6 +200,8 @@ void AppState::frame() {
             wind_direction,
             cloud_base_,
             cloud_top);
+    if (explosion_simulation_enabled_)
+        explosions_.update(elapsed, wind_speed_, wind_direction);
     int framebuffer_width = 0;
     int framebuffer_height = 0;
     glfwGetFramebufferSize(window_, &framebuffer_width, &framebuffer_height);
@@ -490,6 +497,10 @@ void AppState::frame() {
                         volcanoes_.add_spring(position);
                     else if (placement_ == PlacementTool::Meteor)
                         volcanoes_.launch_meteor(position, meteor_size_);
+                    else if (placement_ == PlacementTool::Explosion) {
+                        volcanoes_.impact(terrain_, position, explosion_size_);
+                        explosions_.explode(position, explosion_size_);
+                    }
                     placement_ = PlacementTool::None;
                     placement_miss_ = false;
                 }
@@ -539,6 +550,18 @@ void AppState::frame() {
             up,
             distance_);
     }
+    explosions_.draw(clouds_.scene_framebuffer(),
+        clouds_.scene_depth_texture(),
+        w,
+        h,
+        eye,
+        forward,
+        right,
+        up,
+        sun,
+        daylight,
+        atmosphere_opacity_,
+        distance_);
     if (clouds_enabled_) {
         clouds_.draw(eye,
             forward,
@@ -676,6 +699,12 @@ void AppState::frame() {
         panning_ = false;
     }
     ImGui::SameLine();
+    if (ImGui::Button("Explosion")) {
+        placement_ = PlacementTool::Explosion;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Create tornado")) {
         placement_ = PlacementTool::TornadoOrigin;
         placement_miss_ = false;
@@ -730,6 +759,17 @@ void AppState::frame() {
     ImGui::SliderFloat(
         "Meteor size", &meteor_size_, 0.1f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Explosion size",
+        &explosion_size_,
+        0.25f,
+        15.0f,
+        "%.2fx",
+        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::Checkbox("Explosion simulation", &explosion_simulation_enabled_);
+    ImGui::SameLine();
+    if (ImGui::Button("Clear explosion"))
+        explosions_.clear();
+    ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Brush radius", &brush_radius_, 10.0f, 300.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
@@ -757,6 +797,7 @@ void AppState::frame() {
             placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."
             : placement_ == PlacementTool::Spring ? "Click terrain to place a spring."
             : placement_ == PlacementTool::Meteor ? "Click terrain to target a meteor."
+            : placement_ == PlacementTool::Explosion ? "Click terrain to detonate an explosion."
             : placement_ == PlacementTool::TornadoOrigin
                 ? "Click terrain to set the tornado origin."
             : placement_ == PlacementTool::TornadoDirection
