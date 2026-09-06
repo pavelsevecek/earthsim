@@ -158,6 +158,8 @@ public:
     void water_impact(Vec3 position, float size_scale);
     void explosion_water_impact(Vec3 position, float size_scale);
     void lightning_water_impact(Vec3 position, size_t particle_count);
+    void add_aircraft_vapor(
+        Vec3 position, Vec3 forward, Vec3 right, Vec3 up, size_t particle_pairs);
     void update(
         Terrain& terrain, double elapsed, float water_level, float wind_speed, Vec3 wind_direction);
     void prepare_draw(const Mat4& vp,

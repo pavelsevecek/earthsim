@@ -23,6 +23,25 @@ public:
         float aspect);
 };
 
+class AircraftRenderer {
+    GLuint shader_ = 0;
+    GLuint vao_ = 0;
+    GLuint vbo_ = 0;
+    GLsizei vertex_count_ = 0;
+
+public:
+    explicit AircraftRenderer(const std::filesystem::path& directory);
+    ~AircraftRenderer();
+    void draw(const Mat4& vp,
+        Vec3 position,
+        Vec3 forward,
+        Vec3 right,
+        Vec3 up,
+        Vec3 sun,
+        float daylight,
+        bool mirrored = false);
+};
+
 class TerrainRenderer {
     GLuint shader_ = 0;
 

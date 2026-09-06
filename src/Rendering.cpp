@@ -35,6 +35,134 @@ void SkyRenderer::draw(Vec3 forward,
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
+AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory) {
+    shader_ = program(directory, "aircraft");
+    struct Vertex {
+        Vec3 position;
+        Vec3 normal;
+        Vec3 color;
+    };
+    std::vector<Vertex> vertices;
+    auto triangle = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 color) {
+        Vec3 normal = normalize(cross(b - a, c - a));
+        vertices.insert(vertices.end(),
+            { { a, normal, color }, { b, normal, color }, { c, normal, color } });
+    };
+
+    const Vec3 white{ 0.82f, 0.86f, 0.90f };
+    const Vec3 dark{ 0.12f, 0.18f, 0.24f };
+    const Vec3 red{ 0.78f, 0.08f, 0.06f };
+    const Vec3 nose{ 0, 0, 9 };
+    const Vec3 tail{ 0, 0, -7 };
+    const Vec3 top{ 0, 1.2f, 0 };
+    const Vec3 bottom{ 0, -0.75f, 0 };
+    const Vec3 left{ -1.25f, 0, 0 };
+    const Vec3 right{ 1.25f, 0, 0 };
+    triangle(nose, right, top, white);
+    triangle(nose, bottom, right, white);
+    triangle(nose, left, bottom, red);
+    triangle(nose, top, left, white);
+    triangle(tail, top, right, dark);
+    triangle(tail, right, bottom, dark);
+    triangle(tail, bottom, left, red);
+    triangle(tail, left, top, dark);
+
+    // Broad, slightly swept wings and a vertical tail make the silhouette readable.
+    triangle(
+        { -0.5f, 0.05f, 2.0f }, { -10.0f, 0.0f, -2.2f }, { -0.5f, 0.05f, -1.8f }, white);
+    triangle(
+        { 0.5f, 0.05f, 2.0f }, { 0.5f, 0.05f, -1.8f }, { 10.0f, 0.0f, -2.2f }, white);
+    triangle({ -0.5f, -0.08f, -1.8f },
+        { -10.0f, -0.08f, -2.2f },
+        { -0.5f, -0.08f, 2.0f },
+        red);
+    triangle({ 0.5f, -0.08f, -1.8f },
+        { 0.5f, -0.08f, 2.0f },
+        { 10.0f, -0.08f, -2.2f },
+        red);
+    triangle({ 0, 0.3f, -4.5f }, { 0, 4.0f, -6.4f }, { 0, 0.3f, -6.8f }, red);
+    triangle({ 0, 0.3f, -4.5f }, { 0, 0.3f, -6.8f }, { 0, 4.0f, -6.4f }, red);
+
+    vertex_count_ = GLsizei(vertices.size());
+    glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &vbo_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBufferData(GL_ARRAY_BUFFER,
+        GLsizeiptr(vertices.size() * sizeof(Vertex)),
+        vertices.data(),
+        GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<void*>(offsetof(Vertex, position)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<void*>(offsetof(Vertex, normal)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<void*>(offsetof(Vertex, color)));
+}
+
+AircraftRenderer::~AircraftRenderer() {
+    glDeleteBuffers(1, &vbo_);
+    glDeleteVertexArrays(1, &vao_);
+    glDeleteProgram(shader_);
+}
+
+void AircraftRenderer::draw(const Mat4& vp,
+    Vec3 position,
+    Vec3 forward,
+    Vec3 right,
+    Vec3 up,
+    Vec3 sun,
+    float daylight,
+    bool mirrored) {
+    Mat4 aircraft_translation{ 1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        position.x,
+        position.y,
+        position.z,
+        1 };
+    Mat4 aircraft_view_projection = multiply(vp, aircraft_translation);
+    glUseProgram(shader_);
+    glUniformMatrix4fv(glGetUniformLocation(shader_, "viewProjection"),
+        1,
+        GL_FALSE,
+        aircraft_view_projection.data());
+    uniform(shader_, "aircraftForward", forward);
+    uniform(shader_, "aircraftRight", right);
+    uniform(shader_, "aircraftUp", up);
+    uniform(shader_, "sunDirection", sun);
+    uniform(shader_, "daylight", daylight);
+    glUniform1i(glGetUniformLocation(shader_, "mirrored"), mirrored ? 1 : 0);
+    glBindVertexArray(vao_);
+    glDisable(GL_CULL_FACE);
+    glDrawArrays(GL_TRIANGLES, 0, vertex_count_);
+    glEnable(GL_CULL_FACE);
+}
+
 TerrainRenderer::TerrainRenderer(const std::filesystem::path& directory) {
     shader_ = program(directory, "terrain");
 }

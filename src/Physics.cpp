@@ -718,6 +718,25 @@ void Volcanoes::lightning_water_impact(Vec3 position, size_t particle_count) {
     gpu_.spawn(records);
 }
 
+void Volcanoes::add_aircraft_vapor(
+    Vec3 position, Vec3 forward, Vec3 right, Vec3 up, size_t particle_pairs) {
+    std::vector<GpuParticle> records;
+    records.reserve(particle_pairs * 2);
+    for (size_t i = 0; i < particle_pairs * 2; ++i) {
+        float side = (i & 1) == 0 ? -1.0f : 1.0f;
+        Vec3 p = position - forward * 7.5f + right * (side * 7.5f) +
+                 right * range(-0.35f, 0.35f) + up * range(-0.25f, 0.25f);
+        Vec3 velocity = forward * range(55.0f, 68.0f) + right * range(-0.6f, 0.6f) +
+                        up * range(-0.3f, 0.8f);
+        float size = range(1.2f, 2.0f);
+        // Vapor plus a burst tag retains the aircraft's wake velocity.
+        records.push_back({ { p.x, p.y, p.z, 0 },
+            { velocity.x, velocity.y, velocity.z, 0 },
+            { size, 300, 160, 1 } });
+    }
+    gpu_.spawn(records);
+}
+
 void Volcanoes::update(Terrain& terrain,
     double elapsed,
     float water_level,
