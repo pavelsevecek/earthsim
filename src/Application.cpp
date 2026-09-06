@@ -113,7 +113,8 @@ class AppState {
     float day_phase_offset_ = 0.34f;
     bool day_night_paused_ = false;
     float meteor_size_ = 1.0f;
-    float explosion_size_ = 0.65f;
+    float explosion_size_ = 1.0f;
+    static constexpr float explosion_size_scale_ = 0.65f;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
@@ -498,10 +499,11 @@ void AppState::frame() {
                     else if (placement_ == PlacementTool::Meteor)
                         volcanoes_.launch_meteor(position, meteor_size_);
                     else if (placement_ == PlacementTool::Explosion) {
-                        volcanoes_.impact(terrain_, position, explosion_size_);
+                        float physical_size = explosion_size_ * explosion_size_scale_;
+                        volcanoes_.impact(terrain_, position, physical_size);
                         volcanoes_.explosion_water_impact(
-                            { position.x, water_level_, position.z }, explosion_size_);
-                        explosions_.explode(position, explosion_size_);
+                            { position.x, water_level_, position.z }, physical_size);
+                        explosions_.explode(position, physical_size);
                     }
                     placement_ = PlacementTool::None;
                     placement_miss_ = false;
