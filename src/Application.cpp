@@ -172,6 +172,7 @@ void AppState::frame() {
     float cloud_top = cloud_base_ + cloud_thickness_;
     if (particle_simulation_enabled_)
         volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_);
+    water_renderer_.update(elapsed, volcanoes_.take_water_impacts());
     lightning_.update(terrain_, elapsed, water_level_, cloud_base_, cloud_top, volcanoes_);
     static const std::vector<Volcanoes::Meteor> no_moving_meteors;
     if (cloud_simulation_enabled_)

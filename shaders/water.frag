@@ -1,5 +1,6 @@
 #version 330 core
 in vec3 worldPosition;
+in vec3 surfaceNormal;
 uniform vec3 sunDirection;
 uniform vec3 eye;
 uniform vec3 fogColor;
@@ -38,15 +39,14 @@ float hazeAmount(float distanceToEye) {
     return 1.0-exp(-opticalDepth);
 }
 void main() {
-    const vec3 normal=vec3(0.0,1.0,0.0);
+    vec3 normal=normalize(surfaceNormal);
     vec3 directionToEye=normalize(eye-worldPosition);
     vec3 reflection=reflect(-directionToEye,normal);
     float skyHeight=smoothstep(-0.15,0.85,reflection.y);
     vec3 reflectedSky=mix(vec3(0.34,0.52,0.72),vec3(0.055,0.24,0.62),skyHeight)*daylight;
     vec4 reflectedClip=reflectionViewProjection*vec4(worldPosition,1.0);
     vec2 reflectionUv=reflectedClip.xy/max(abs(reflectedClip.w),0.0001)*0.5+0.5;
-    vec2 ripple=vec2(sin(worldPosition.x*0.045+time*0.7)+sin(worldPosition.z*0.071-time*0.43),
-        cos(worldPosition.z*0.052+time*0.58)+sin(worldPosition.x*0.063+time*0.37))*0.0025;
+    vec2 ripple=normal.xz*0.035;
     float edge=min(min(reflectionUv.x,reflectionUv.y),min(1.0-reflectionUv.x,1.0-reflectionUv.y));
     float inside=smoothstep(0.0,0.025,edge)*step(0.0001,reflectedClip.w);
     vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv+ripple,vec2(0.001),vec2(0.999))).rgb;
@@ -64,7 +64,7 @@ void main() {
     vec3 color=(fresnel*reflectedRadiance
         +(1.0-fresnel)*(1.0-transmission)*waterScattering)/max(alpha,0.0001);
     float groundHeight=texture(terrainHeight,worldPosition.xz/2000.0+0.5).r;
-    float waterDepth=waterLevel-groundHeight;
+    float waterDepth=worldPosition.y-groundHeight;
     vec2 foamPosition=worldPosition.xz*0.085;
     float broad=foamNoise(foamPosition+vec2(time*0.10,-time*0.07));
     float detail=foamNoise(foamPosition*2.7+vec2(-time*0.19,time*0.13));

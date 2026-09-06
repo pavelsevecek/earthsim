@@ -12,6 +12,10 @@ public:
         float trail_emission = 0;
         float size_scale = 1;
     };
+    struct WaterImpact {
+        Vec3 position;
+        float size_scale = 1;
+    };
 
 private:
     static constexpr size_t max_tornadoes_ = 8;
@@ -66,6 +70,7 @@ private:
     };
     GpuSimulation gpu_;
     std::vector<Meteor> meteors_;
+    std::vector<WaterImpact> water_impacts_;
     std::vector<Tornado> tornadoes_;
     uint32_t next_tornado_id_ = 1;
     struct Sprite {
@@ -115,6 +120,7 @@ public:
     const std::vector<Vec3>& lava_sources() const;
     const std::vector<Vec3>& spring_sources() const;
     const std::vector<Meteor>& meteors() const;
+    std::vector<WaterImpact> take_water_impacts();
     GLuint terrain_texture() const;
     GLuint particle_buffer() const;
     GLuint particle_head_buffer() const;
@@ -133,7 +139,7 @@ public:
     void add_water(const Terrain& terrain, Vec3 center, float radius, float spacing);
     void add_lava(const Terrain& terrain, Vec3 center, float radius, float spacing);
     void impact(Terrain& terrain, Vec3 position, float size_scale);
-    void water_impact(Vec3 position);
+    void water_impact(Vec3 position, float size_scale);
     void lightning_water_impact(Vec3 position, size_t particle_count);
     void update(Terrain& terrain, double elapsed, float water_level, float wind_speed);
     void prepare_draw(const Mat4& vp,

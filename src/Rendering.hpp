@@ -44,12 +44,21 @@ public:
 };
 
 class WaterRenderer {
+    static constexpr int resolution_ = 256;
     GLuint shader_ = 0;
+    GLuint simulation_ = 0;
+    GLuint impact_ = 0;
     GLuint vao_ = 0;
+    GLuint ebo_ = 0;
+    std::array<GLuint, 2> states_{};
+    int state_index_ = 0;
+    GLsizei index_count_ = 0;
+    double simulation_accumulator_ = 0.0;
 
 public:
     explicit WaterRenderer(const std::filesystem::path& directory);
     ~WaterRenderer();
+    void update(double elapsed, const std::vector<Volcanoes::WaterImpact>& impacts);
     void draw(const Mat4& vp,
         const Mat4& reflection_vp,
         GLuint reflection_texture,

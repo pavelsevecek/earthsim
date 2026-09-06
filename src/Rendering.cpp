@@ -73,12 +73,89 @@ void TerrainRenderer::draw(const Terrain& terrain,
 
 WaterRenderer::WaterRenderer(const std::filesystem::path& directory) {
     shader_ = program(directory, "water");
+    simulation_ = compute_program(directory, "water_sim");
+    impact_ = compute_program(directory, "water_impact");
     glGenVertexArrays(1, &vao_);
+    glGenBuffers(1, &ebo_);
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+    std::vector<uint32_t> indices;
+    indices.reserve(size_t(resolution_ - 1) * size_t(resolution_ - 1) * 6);
+    for (int z = 0; z < resolution_ - 1; ++z) {
+        for (int x = 0; x < resolution_ - 1; ++x) {
+            uint32_t lower_left = uint32_t(z * resolution_ + x);
+            uint32_t lower_right = lower_left + 1;
+            uint32_t upper_left = lower_left + resolution_;
+            uint32_t upper_right = upper_left + 1;
+            indices.insert(indices.end(),
+                { lower_left, lower_right, upper_right, lower_left, upper_right, upper_left });
+        }
+    }
+    index_count_ = GLsizei(indices.size());
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+        GLsizeiptr(indices.size() * sizeof(uint32_t)),
+        indices.data(),
+        GL_STATIC_DRAW);
+
+    glGenTextures(GLsizei(states_.size()), states_.data());
+    std::vector<float> initial_state(size_t(resolution_) * size_t(resolution_) * 2, 0.0f);
+    for (GLuint state : states_) {
+        glBindTexture(GL_TEXTURE_2D, state);
+        glTexImage2D(GL_TEXTURE_2D,
+            0,
+            GL_RG32F,
+            resolution_,
+            resolution_,
+            0,
+            GL_RG,
+            GL_FLOAT,
+            initial_state.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
 }
 
 WaterRenderer::~WaterRenderer() {
+    glDeleteTextures(GLsizei(states_.size()), states_.data());
+    glDeleteBuffers(1, &ebo_);
     glDeleteVertexArrays(1, &vao_);
+    glDeleteProgram(impact_);
+    glDeleteProgram(simulation_);
     glDeleteProgram(shader_);
+}
+
+void WaterRenderer::update(
+    double elapsed, const std::vector<Volcanoes::WaterImpact>& impacts) {
+    constexpr GLuint work_group_size = 16;
+    constexpr GLuint groups = (resolution_ + work_group_size - 1) / work_group_size;
+
+    if (!impacts.empty()) {
+        glUseProgram(impact_);
+        glBindImageTexture(0, states_[state_index_], 0, GL_FALSE, 0, GL_READ_WRITE, GL_RG32F);
+        for (const auto& impact : impacts) {
+            uniform(impact_, "impactPosition", impact.position);
+            uniform(impact_, "impactScale", impact.size_scale);
+            glDispatchCompute(groups, groups, 1);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
+        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    }
+
+    constexpr double step = 1.0 / 120.0;
+    simulation_accumulator_ = std::min(simulation_accumulator_ + elapsed, 0.25);
+    glUseProgram(simulation_);
+    uniform(simulation_, "dt", float(step));
+    while (simulation_accumulator_ >= step) {
+        simulation_accumulator_ -= step;
+        int next_state = 1 - state_index_;
+        glBindImageTexture(0, states_[state_index_], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
+        glBindImageTexture(1, states_[next_state], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
+        glDispatchCompute(groups, groups, 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+        state_index_ = next_state;
+    }
 }
 
 void WaterRenderer::draw(const Mat4& vp,
@@ -107,6 +184,9 @@ void WaterRenderer::draw(const Mat4& vp,
     glActiveTexture(GL_TEXTURE7);
     glBindTexture(GL_TEXTURE_2D, terrain_height_texture);
     glUniform1i(glGetUniformLocation(shader_, "terrainHeight"), 7);
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_2D, states_[state_index_]);
+    glUniform1i(glGetUniformLocation(shader_, "waterState"), 8);
     glUniformMatrix4fv(glGetUniformLocation(shader_, "reflectionViewProjection"),
         1,
         GL_FALSE,
@@ -118,7 +198,7 @@ void WaterRenderer::draw(const Mat4& vp,
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDrawElements(GL_TRIANGLES, index_count_, GL_UNSIGNED_INT, nullptr);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 }

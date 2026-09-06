@@ -447,6 +447,12 @@ const std::vector<Volcanoes::Meteor>& Volcanoes::meteors() const {
     return meteors_;
 }
 
+std::vector<Volcanoes::WaterImpact> Volcanoes::take_water_impacts() {
+    std::vector<WaterImpact> impacts;
+    impacts.swap(water_impacts_);
+    return impacts;
+}
+
 GLuint Volcanoes::terrain_texture() const {
     return gpu_.terrain_texture;
 }
@@ -579,7 +585,8 @@ void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
     gpu_.spawn(records);
 }
 
-void Volcanoes::water_impact(Vec3 position) {
+void Volcanoes::water_impact(Vec3 position, float size_scale) {
+    water_impacts_.push_back({ position, size_scale });
     constexpr size_t vapor_count = 1200;
     std::vector<GpuParticle> records;
     records.reserve(vapor_count);
@@ -706,7 +713,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
             meteor.position = next;
             if (hit) {
                 if (hit_water)
-                    water_impact(next);
+                    water_impact(next, meteor.size_scale);
                 else
                     impact(terrain, next, meteor.size_scale);
                 meteors_.erase(meteors_.begin() + i);
