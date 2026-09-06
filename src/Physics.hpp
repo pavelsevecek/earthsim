@@ -37,6 +37,7 @@ private:
         static constexpr uint32_t capacity_ = 16000;
         static constexpr uint32_t buckets_ = 32768;
         static constexpr uint32_t terrain_size_ = Terrain::cell_count() + 1;
+        static constexpr uint32_t scorched_size_ = 2048;
         // Particle contributions are quantized individually before atomic addition.
         // Nanometre-scale fixed point preserves slow-flow contributions until the
         // asynchronous 100 ms batches are accumulated on the CPU.
@@ -51,6 +52,7 @@ private:
         GLuint sediment = 0;
         GLuint terrain_delta = 0;
         GLuint terrain_flow = 0;
+        GLuint scorched_texture = 0;
         std::array<ErosionReadback, 3> erosion_readbacks{};
         uint32_t cursor = 0;
         explicit GpuSimulation(const std::filesystem::path& directory, const Terrain& terrain);
@@ -127,6 +129,7 @@ public:
     const std::vector<Meteor>& meteors() const;
     std::vector<WaterImpact> take_water_impacts();
     GLuint terrain_texture() const;
+    GLuint scorched_texture() const;
     GLuint particle_buffer() const;
     GLuint particle_head_buffer() const;
     GLuint particle_next_buffer() const;

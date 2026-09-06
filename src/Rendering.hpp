@@ -32,6 +32,7 @@ public:
     void draw(const Terrain& terrain,
         const TerrainShadows& shadows,
         const Rain& rain,
+        GLuint scorched_texture,
         const Mat4& vp,
         Vec3 eye,
         Vec3 sun,

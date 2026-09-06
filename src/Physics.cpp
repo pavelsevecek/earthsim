@@ -80,6 +80,23 @@ Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
         inactive.data());
     glGenTextures(1, &terrain_texture);
     upload_terrain(terrain);
+
+    glGenTextures(1, &scorched_texture);
+    glBindTexture(GL_TEXTURE_2D, scorched_texture);
+    std::vector<uint32_t> unscorched(size_t(scorched_size_) * scorched_size_);
+    glTexImage2D(GL_TEXTURE_2D,
+        0,
+        GL_R32UI,
+        scorched_size_,
+        scorched_size_,
+        0,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_INT,
+        unscorched.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 Volcanoes::GpuSimulation::~GpuSimulation() {
@@ -95,6 +112,7 @@ Volcanoes::GpuSimulation::~GpuSimulation() {
         glDeleteProgram(program);
     glDeleteBuffers(GLsizei(buffers.size()), buffers.data());
     glDeleteTextures(1, &terrain_texture);
+    glDeleteTextures(1, &scorched_texture);
 }
 
 void Volcanoes::GpuSimulation::upload_terrain(const Terrain& terrain) {
@@ -199,6 +217,7 @@ void Volcanoes::GpuSimulation::step(float dt,
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, GLuint(i), buffers[i]);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, sediment);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, terrain_delta);
+    glBindImageTexture(0, scorched_texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R32UI);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, terrain_texture);
     auto run = [&](int pass, uint32_t count) {
@@ -251,7 +270,8 @@ void Volcanoes::GpuSimulation::step(float dt,
     run(10, terrain_values);
     run(8, capacity_);
     run(11, terrain_values);
-    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
+                    GL_TEXTURE_FETCH_BARRIER_BIT);
 }
 
 // Integrate Planck radiance against the Wyman/Sloan/Shirley CIE 1931 fits:
@@ -445,6 +465,10 @@ std::vector<Volcanoes::WaterImpact> Volcanoes::take_water_impacts() {
 
 GLuint Volcanoes::terrain_texture() const {
     return gpu_.terrain_texture;
+}
+
+GLuint Volcanoes::scorched_texture() const {
+    return gpu_.scorched_texture;
 }
 
 GLuint Volcanoes::particle_buffer() const {

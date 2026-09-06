@@ -8,6 +8,7 @@ layout(std430,binding=1) readonly buffer Previous { vec4 previous[]; };
 layout(std430,binding=6) buffer SedimentStates { vec4 sedimentState[]; };
 layout(std430,binding=7) buffer TerrainDelta { int terrainDelta[]; };
 layout(std430,binding=2) buffer TerrainFlow { ivec4 terrainFlow[]; };
+layout(binding=0,r32ui) uniform uimage2D terrainScorched;
 uniform sampler2D terrainHeight;
 uniform uint capacity;
 uniform float dt;
@@ -72,18 +73,25 @@ void main() {
         return;
     }
 
-    if(erosionSpeed<=0.0) return;
-
-    // Newly emitted particles need time to leave their tightly concentrated
-    // source region before they are allowed to cut the terrain.
-    if(particles[id].positionAge.w<erosionDelay) return;
-
     bool water=(flags&16u)!=0u;
     bool lava=(flags&1u)!=0u&&(flags&(8u|16u|32u|64u))==0u;
     if((flags&4u)==0u || (!water&&!lava)) return;
     vec3 normal=terrainNormal(particles[id].positionAge.xz);
     float separation=(particles[id].positionAge.y-heightAt(particles[id].positionAge.xz))*normal.y;
     if(separation>radius+0.05) return;
+
+    if(lava) {
+        vec2 uv=clamp(particles[id].positionAge.xz/2000.0+0.5,vec2(0.0),vec2(0.99999));
+        ivec2 cell=ivec2(uv*vec2(imageSize(terrainScorched)));
+        imageAtomicAdd(terrainScorched,cell,uint(max(1.0,round(dt*4096.0))));
+    }
+
+    if(erosionSpeed<=0.0) return;
+
+    // Newly emitted particles need time to leave their tightly concentrated
+    // source region before they are allowed to cut the terrain.
+    if(particles[id].positionAge.w<erosionDelay) return;
+
     // Pass 7 has already removed inward velocity and applied terrain friction.
     // The reconstructed velocity in Previous still contains the impact and shear
     // that produced that collision response.

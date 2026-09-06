@@ -8,6 +8,7 @@ uniform vec3 sunDirection;
 uniform float daylight;
 uniform vec3 fogColor;
 uniform float atmosphereOpacity;
+uniform usampler2D terrainScorched;
 layout(std430,binding=7) readonly buffer TerrainWetness { uint wetness[]; };
 out vec4 fragColor;
 float terrainHash(vec2 cell) {
@@ -21,6 +22,18 @@ float terrainNoise(vec2 position) {
     float c=terrainHash(cell+vec2(0.0,1.0));
     float d=terrainHash(cell+vec2(1.0,1.0));
     return mix(mix(a,b,fraction.x),mix(c,d,fraction.x),fraction.y);
+}
+float sampleScorched(vec2 uv) {
+    ivec2 size=textureSize(terrainScorched,0);
+    vec2 position=uv*vec2(size)-0.5;
+    ivec2 cell=ivec2(floor(position));
+    vec2 fraction=fract(position);
+    ivec2 maximum=size-1;
+    float a=float(texelFetch(terrainScorched,clamp(cell,ivec2(0),maximum),0).r);
+    float b=float(texelFetch(terrainScorched,clamp(cell+ivec2(1,0),ivec2(0),maximum),0).r);
+    float c=float(texelFetch(terrainScorched,clamp(cell+ivec2(0,1),ivec2(0),maximum),0).r);
+    float d=float(texelFetch(terrainScorched,clamp(cell+ivec2(1,1),ivec2(0),maximum),0).r);
+    return mix(mix(a,b,fraction.x),mix(c,d,fraction.x),fraction.y)/65535.0;
 }
 float hazeOpticalDepth(float distanceToEye) {
     float distanceBeyondClearAir=max(distanceToEye-300.0,0.0);
@@ -51,6 +64,8 @@ void main() {
     uvec2 wetCell=uvec2(wetUv*256.0);
     float wetAmount=clamp(float(wetness[wetCell.y*256u+wetCell.x])/65535.0,0.0,1.0);
     albedo=mix(albedo,albedo*0.38+vec3(0.008,0.014,0.018),wetAmount*0.78);
+    float scorchedAmount=clamp(sampleScorched(wetUv),0.0,1.0);
+    albedo=mix(albedo,vec3(0.028,0.025,0.023),scorchedAmount);
     float direct = max(dot(n, sunDirection), 0.0) * smoothstep(-0.05, 0.14, sunDirection.y);
     vec3 sunlight = mix(vec3(1.0, 0.38, 0.14), vec3(1.0, 0.96, 0.84), smoothstep(0.0, 0.4, sunDirection.y));
     vec3 ambient = mix(vec3(0.045, 0.065, 0.12), vec3(0.28, 0.34, 0.40), daylight);

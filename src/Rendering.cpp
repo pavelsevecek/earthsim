@@ -46,6 +46,7 @@ TerrainRenderer::~TerrainRenderer() {
 void TerrainRenderer::draw(const Terrain& terrain,
     const TerrainShadows& shadows,
     const Rain& rain,
+    GLuint scorched_texture,
     const Mat4& vp,
     Vec3 eye,
     Vec3 sun,
@@ -67,6 +68,10 @@ void TerrainRenderer::draw(const Terrain& terrain,
         uniform(shader_, "clipDirection", clip_direction);
     }
     rain.bind_wetness();
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, scorched_texture);
+    glUniform1i(glGetUniformLocation(shader_, "terrainScorched"), 4);
+    glActiveTexture(GL_TEXTURE0);
     shadows.bind(shader_);
     terrain.draw();
 }

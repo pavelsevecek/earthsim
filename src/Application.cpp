@@ -365,6 +365,7 @@ void AppState::frame() {
     terrain_renderer_.draw(terrain_,
         shadows_,
         rain_,
+        volcanoes_.scorched_texture(),
         reflection_vp,
         reflected_eye,
         sun,
@@ -430,7 +431,16 @@ void AppState::frame() {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_BACK);
     terrain_renderer_.draw(
-        terrain_, shadows_, rain_, vp, eye, sun, fog, daylight, atmosphere_opacity_);
+        terrain_,
+        shadows_,
+        rain_,
+        volcanoes_.scorched_texture(),
+        vp,
+        eye,
+        sun,
+        fog,
+        daylight,
+        atmosphere_opacity_);
     if (place_click || target_click) {
         // Read only for a surface action, before particles/clouds/UI are drawn.
         // The scene depth selects the visible triangle, including mountain occlusion.
