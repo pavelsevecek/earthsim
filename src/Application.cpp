@@ -474,6 +474,29 @@ void AppState::frame() {
         true,
         water_level_,
         reflection_clip_direction);
+    glDisable(GL_CLIP_DISTANCE0);
+    if (clouds_enabled_)
+        clouds_.draw_reflection(reflection_.framebuffer(),
+            reflection_.depth_texture(),
+            reflection_.width(),
+            reflection_.height(),
+            reflected_eye,
+            reflected_forward,
+            reflected_right,
+            reflected_up,
+            sun,
+            fog,
+            daylight,
+            atmosphere_opacity_,
+            cloud_opacity_,
+            float(simulation_time_),
+            cloud_coverage_,
+            wind_speed_,
+            wind_direction,
+            cloud_base_,
+            cloud_top,
+            distance_);
+    glEnable(GL_CLIP_DISTANCE0);
     lightning_.draw(reflection_vp,
         reflected_eye,
         reflected_right,

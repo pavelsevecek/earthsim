@@ -165,6 +165,26 @@ public:
         float cloud_top,
         float distance,
         GLuint destination);
+    void draw_reflection(GLuint destination,
+        GLuint scene_depth,
+        int width,
+        int height,
+        Vec3 eye,
+        Vec3 forward,
+        Vec3 right,
+        Vec3 up,
+        Vec3 sun,
+        Vec3 fog,
+        float daylight,
+        float atmosphere_opacity,
+        float cloud_opacity,
+        float time,
+        float coverage,
+        float wind_speed,
+        Vec3 wind_direction,
+        float cloud_base,
+        float cloud_top,
+        float distance);
 };
 
 class ExplosionClouds {
@@ -250,7 +270,9 @@ public:
     ~PlanarReflection();
     void resize(int full_width, int full_height);
     void begin(int full_width, int full_height);
+    GLuint framebuffer() const;
     GLuint color_texture() const;
+    GLuint depth_texture() const;
     int width() const;
     int height() const;
 };

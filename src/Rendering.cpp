@@ -798,6 +798,76 @@ void Clouds::draw(Vec3 eye,
     glActiveTexture(GL_TEXTURE0);
 }
 
+void Clouds::draw_reflection(GLuint destination,
+    GLuint scene_depth,
+    int width,
+    int height,
+    Vec3 eye,
+    Vec3 forward,
+    Vec3 right,
+    Vec3 up,
+    Vec3 sun,
+    Vec3 fog,
+    float daylight,
+    float atmosphere_opacity,
+    float cloud_opacity,
+    float time,
+    float coverage,
+    float wind_speed,
+    Vec3 wind_direction,
+    float cloud_base,
+    float cloud_top,
+    float distance) {
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    // Avoid sampling from an image while it is attached to the draw framebuffer.
+    // Cloud depth testing is performed explicitly in the ray-march shader.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    glViewport(0, 0, width, height);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(shader_);
+    glBindVertexArray(vao_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, scene_depth);
+    glUniform1i(glGetUniformLocation(shader_, "sceneDepth"), 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, noise_texture_);
+    glUniform1i(glGetUniformLocation(shader_, "noiseTexture"), 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_3D, density_texture());
+    glUniform1i(glGetUniformLocation(shader_, "cloudDensityTexture"), 2);
+    uniform(shader_, "eye", eye);
+    uniform(shader_, "cameraForward", forward);
+    uniform(shader_, "cameraRight", right);
+    uniform(shader_, "cameraUp", up);
+    uniform(shader_, "sunDirection", sun);
+    uniform(shader_, "fogColor", fog);
+    uniform(shader_, "daylight", daylight);
+    uniform(shader_, "atmosphereOpacity", atmosphere_opacity);
+    uniform(shader_, "cloudOpacity", cloud_opacity);
+    uniform(shader_, "time", time);
+    uniform(shader_, "cloudCoverage", coverage);
+    uniform(shader_, "windSpeed", wind_speed);
+    glUniform2f(
+        glGetUniformLocation(shader_, "windDirection"), wind_direction.x, wind_direction.z);
+    uniform(shader_, "cloudBase", cloud_base);
+    uniform(shader_, "cloudTop", cloud_top);
+    uniform(shader_, "aspect", float(width) / height);
+    uniform(shader_, "tanHalfFov", std::tan(pi / 8));
+    Mat4 projection = perspective(float(width) / height, distance);
+    glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, scene_depth, 0);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_TRUE);
+    glActiveTexture(GL_TEXTURE0);
+}
+
 ExplosionClouds::ExplosionClouds(
     const std::filesystem::path& directory, GLuint terrain_texture)
     : terrain_height_texture_(terrain_texture) {
@@ -1210,8 +1280,16 @@ void PlanarReflection::begin(int full_width, int full_height) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+GLuint PlanarReflection::framebuffer() const {
+    return fbo_;
+}
+
 GLuint PlanarReflection::color_texture() const {
     return color_;
+}
+
+GLuint PlanarReflection::depth_texture() const {
+    return depth_;
 }
 
 int PlanarReflection::width() const {
