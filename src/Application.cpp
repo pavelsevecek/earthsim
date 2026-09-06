@@ -742,6 +742,16 @@ void AppState::frame() {
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Particle spacing", &particle_spacing_, 1.0f, 12.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float lava_spawn_rate = volcanoes_.lava_spawn_rate();
+    if (ImGui::DragFloat(
+            "Volcano spawn rate", &lava_spawn_rate, 1.0f, 0.0f, 1000.0f, "%.1f / s"))
+        volcanoes_.set_lava_spawn_rate(lava_spawn_rate);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float spring_spawn_rate = volcanoes_.spring_spawn_rate();
+    if (ImGui::DragFloat(
+            "Spring spawn rate", &spring_spawn_rate, 1.0f, 0.0f, 1000.0f, "%.1f / s"))
+        volcanoes_.set_spring_spawn_rate(spring_spawn_rate);
     if (placement_ != PlacementTool::None) {
         const char* placement_prompt =
             placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."

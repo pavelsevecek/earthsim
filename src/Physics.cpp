@@ -4,8 +4,7 @@ namespace earth_sim {
 Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
     const Terrain& terrain) {
     try {
-        constexpr std::array<const char*, 12> pass_names{
-            "particle_clear_hash",
+        constexpr std::array<const char*, 12> pass_names{ "particle_clear_hash",
             "particle_integrate",
             "particle_build_hash",
             "particle_density_constraint",
@@ -16,8 +15,7 @@ Volcanoes::GpuSimulation::GpuSimulation(const std::filesystem::path& directory,
             "particle_surface_exchange",
             "particle_water_lava_interaction",
             "terrain_clear_flow",
-            "terrain_erode_flow"
-        };
+            "terrain_erode_flow" };
         for (size_t pass = 0; pass < compute.size(); ++pass)
             compute[pass] = compute_program(directory, pass_names[pass]);
     } catch (...) {
@@ -164,9 +162,8 @@ bool Volcanoes::GpuSimulation::schedule_erosion_readback() {
 }
 
 bool Volcanoes::GpuSimulation::consume_erosion_readback(std::vector<int32_t>& deltas) {
-    auto ready = std::find_if(erosion_readbacks.begin(),
-        erosion_readbacks.end(),
-        [](const ErosionReadback& readback) {
+    auto ready = std::find_if(
+        erosion_readbacks.begin(), erosion_readbacks.end(), [](const ErosionReadback& readback) {
             if (!readback.fence)
                 return false;
             GLenum status = glClientWaitSync(readback.fence, 0, 0);
@@ -208,18 +205,15 @@ void Volcanoes::GpuSimulation::step(float dt,
         GLuint program = compute[size_t(pass)];
         glUseProgram(program);
         glUniform1i(glGetUniformLocation(program, "terrainHeight"), 0);
-        glUniform1ui(
-            glGetUniformLocation(program, "capacity"), pass >= 10 ? count : capacity_);
+        glUniform1ui(glGetUniformLocation(program, "capacity"), pass >= 10 ? count : capacity_);
         glUniform1f(glGetUniformLocation(program, "dt"), dt);
         glUniform1f(glGetUniformLocation(program, "particleLifetime"), lifetime);
         glUniform1f(glGetUniformLocation(program, "waterLevel"), water_level);
         glUniform1f(glGetUniformLocation(program, "windSpeed"), wind_speed);
-        glUniform2f(glGetUniformLocation(program, "windDirection"),
-            wind_direction.x,
-            wind_direction.z);
+        glUniform2f(
+            glGetUniformLocation(program, "windDirection"), wind_direction.x, wind_direction.z);
         glUniform1f(glGetUniformLocation(program, "erosionSpeed"), erosion_speed);
-        glUniform1f(
-            glGetUniformLocation(program, "terrainDeltaScale"), terrain_delta_scale_);
+        glUniform1f(glGetUniformLocation(program, "terrainDeltaScale"), terrain_delta_scale_);
         glUniform1i(glGetUniformLocation(program, "tornadoCount"), GLint(tornado_count));
         if (tornado_count > 0) {
             glUniform4fv(glGetUniformLocation(program, "tornadoCenterId[0]"),
@@ -351,10 +345,7 @@ void Volcanoes::launch_meteor(Vec3 target, float size_scale) {
         std::sin(tilt) * std::cos(azimuth), std::cos(tilt), std::sin(tilt) * std::sin(azimuth)
     };
     meteors_.push_back(
-        { target + approach * (700 / approach.y),
-            approach * (-range(650, 900)),
-            0,
-            size_scale });
+        { target + approach * (700 / approach.y), approach * (-range(650, 900)), 0, size_scale });
 }
 
 void Volcanoes::terrain_changed(Terrain& terrain) {
@@ -403,11 +394,7 @@ void Volcanoes::add_tornado(Vec3 position, Vec3 direction_point, float water_lev
     float speed = range(12.0f, 24.0f);
     float lifetime = range(20.0f, 45.0f);
     uint32_t id = next_tornado_id_++;
-    tornadoes_.push_back({ position,
-        direction * speed,
-        0,
-        lifetime,
-        id });
+    tornadoes_.push_back({ position, direction * speed, 0, lifetime, id });
 
     constexpr size_t particle_count = 1500;
     constexpr float height = 150.0f;
@@ -420,9 +407,8 @@ void Volcanoes::add_tornado(Vec3 position, Vec3 direction_point, float water_lev
         float phase = range(0, 2 * pi);
         Vec3 p = position + Vec3{ std::cos(phase) * radius, y, std::sin(phase) * radius };
         float size = range(4.0f, 6.f);
-        records.push_back({ { p.x, p.y, p.z, 0 },
-            { 0, 0, 0, lifetime },
-            { size, float(id), 64, 1 } });
+        records.push_back(
+            { { p.x, p.y, p.z, 0 }, { 0, 0, 0, lifetime }, { size, float(id), 64, 1 } });
     }
     gpu_.spawn(records);
 }
@@ -493,6 +479,22 @@ void Volcanoes::set_particle_brightness(float brightness) {
     particle_brightness_ = brightness;
 }
 
+float Volcanoes::lava_spawn_rate() const {
+    return lava_spawn_rate_;
+}
+
+void Volcanoes::set_lava_spawn_rate(float rate) {
+    lava_spawn_rate_ = std::max(0.0f, rate);
+}
+
+float Volcanoes::spring_spawn_rate() const {
+    return spring_spawn_rate_;
+}
+
+void Volcanoes::set_spring_spawn_rate(float rate) {
+    spring_spawn_rate_ = std::max(0.0f, rate);
+}
+
 float Volcanoes::erosion_speed() const {
     return erosion_speed_;
 }
@@ -517,13 +519,15 @@ void Volcanoes::set_particle_interactions(bool enabled) {
     particle_interactions_ = enabled;
 }
 
-void Volcanoes::add_surface_particles(
-    const Terrain& terrain, Vec3 center, float radius, float spacing, bool water) {
+void Volcanoes::add_surface_particles(const Terrain& terrain,
+    Vec3 center,
+    float radius,
+    float spacing,
+    bool water) {
     constexpr float golden_angle = 2.39996323f;
     const float area = pi * radius * radius;
-    const size_t particle_count =
-        std::min(size_t(GpuSimulation::capacity_),
-            std::max(size_t(1), size_t(std::ceil(area / (spacing * spacing)))));
+    const size_t particle_count = std::min(size_t(GpuSimulation::capacity_),
+        std::max(size_t(1), size_t(std::ceil(area / (spacing * spacing)))));
 
     std::vector<GpuParticle> records;
     records.reserve(particle_count);
@@ -533,9 +537,9 @@ void Volcanoes::add_surface_particles(
         // and bare patches produced by independent random samples.
         float radial_distance = radius * std::sqrt((float(i) + 0.5f) / float(particle_count));
         float angle = phase + float(i) * golden_angle;
-        Vec3 position = center +
-                        Vec3{ std::cos(angle) * radial_distance, 0,
-                            std::sin(angle) * radial_distance };
+        Vec3 position =
+            center +
+            Vec3{ std::cos(angle) * radial_distance, 0, std::sin(angle) * radial_distance };
         if (std::abs(position.x) >= 999.0f || std::abs(position.z) >= 999.0f)
             continue;
 
@@ -636,8 +640,8 @@ void Volcanoes::update(Terrain& terrain,
     std::vector<int32_t> erosion_delta;
     bool terrain_eroded = false;
     while (gpu_.consume_erosion_readback(erosion_delta))
-        terrain_eroded |= terrain.apply_height_deltas(
-            erosion_delta, 1.0f / GpuSimulation::terrain_delta_scale_);
+        terrain_eroded |=
+            terrain.apply_height_deltas(erosion_delta, 1.0f / GpuSimulation::terrain_delta_scale_);
     if (terrain_eroded)
         terrain_changed(terrain);
 
@@ -653,9 +657,9 @@ void Volcanoes::update(Terrain& terrain,
             terrain.surface(tornado.position.x, tornado.position.z, normal);
             float speed = std::sqrt(dot(tornado.velocity, tornado.velocity));
             Vec3 heading = tornado.velocity * (1.0f / speed);
-            Vec3 gradient{ -normal.x / std::max(normal.y, 0.001f),
-                0,
-                -normal.z / std::max(normal.y, 0.001f) };
+            Vec3 gradient{
+                -normal.x / std::max(normal.y, 0.001f), 0, -normal.z / std::max(normal.y, 0.001f)
+            };
             float uphill_slope = dot(gradient, heading);
             if (uphill_slope > 0.1f) {
                 Vec3 contour{ -gradient.z, 0, gradient.x };
@@ -668,9 +672,9 @@ void Volcanoes::update(Terrain& terrain,
             }
             Vec3 previous = tornado.position;
             tornado.position = tornado.position + tornado.velocity * dt;
-            tornado.position.y = std::max(
-                terrain.surface(tornado.position.x, tornado.position.z, normal),
-                water_level + source_clearance_);
+            tornado.position.y =
+                std::max(terrain.surface(tornado.position.x, tornado.position.z, normal),
+                    water_level + source_clearance_);
             tornado.age += dt;
             if (tornado.age >= tornado.lifetime || std::abs(tornado.position.x) >= 990.0f ||
                 std::abs(tornado.position.z) >= 990.0f) {
@@ -696,8 +700,8 @@ void Volcanoes::update(Terrain& terrain,
             Vec3 contact;
             bool hit_water = false;
             if (previous_position.y > water_level && next.y <= water_level) {
-                float crossing = (previous_position.y - water_level) /
-                                 (previous_position.y - next.y);
+                float crossing =
+                    (previous_position.y - water_level) / (previous_position.y - next.y);
                 Vec3 water_contact = previous_position + (next - previous_position) * crossing;
                 Vec3 normal;
                 if (terrain.surface(water_contact.x, water_contact.z, normal) < water_level) {
@@ -730,31 +734,38 @@ void Volcanoes::update(Terrain& terrain,
             else
                 ++i;
         }
-        emission_ += 90 * dt;
+        lava_emission_ += lava_spawn_rate_ * dt;
+        spring_emission_ += spring_spawn_rate_ * dt;
         std::vector<GpuParticle> spawned;
-        while (emission_ >= 1) {
-            emission_ -= 1;
+        while (lava_emission_ >= 1) {
+            lava_emission_ -= 1;
             for (Vec3 vent : vents_) {
                 Vec3 velocity{ range(-1.2f, 1.2f), range(0.0f, 1.5f), range(-1.2f, 1.2f) };
                 float size = range(1.2f, 2.2f);
                 float temperature = range(1450, 1650);
-                Vec3 spawn = vent + Vec3{ range(-1.0f, 1.0f), 0.25f, range(-1.0f, 1.0f) };
+                Vec3 spawn =
+                    vent + Vec3{ range(-2.0f, 2.0f), range(0.25f, 5.f), range(-2.0f, 2.0f) };
                 Vec3 normal;
                 float ground = terrain.surface(spawn.x, spawn.z, normal);
                 float radius = std::max(0.65f, size * 0.52f);
-                spawn.y = std::max(spawn.y, ground + radius / std::max(normal.y, 0.25f) + 0.25f);
+                spawn.y = std::max(spawn.y, ground + radius / std::max(normal.y, 0.25f) + range(0.25f, 5.f));
                 spawned.push_back({ { spawn.x, spawn.y, spawn.z, 0 },
                     { velocity.x, velocity.y, velocity.z, 0 },
                     { size, temperature, 7, 1 } });
             }
+        }
+        while (spring_emission_ >= 1) {
+            spring_emission_ -= 1;
             for (Vec3 spring : springs_) {
                 Vec3 velocity{ range(-1.2f, 1.2f), range(0.0f, 1.5f), range(-1.2f, 1.2f) };
                 float size = range(1.2f, 2.2f);
-                Vec3 spawn = spring + Vec3{ range(-1.0f, 1.0f), 0.25f, range(-1.0f, 1.0f) };
+                Vec3 spawn =
+                    spring + Vec3{ range(-2.0f, 2.0f), range(0.25f, 5.f), range(-2.0f, 2.0f) };
                 Vec3 normal;
                 float ground = terrain.surface(spawn.x, spawn.z, normal);
                 float radius = std::max(0.65f, size * 0.52f);
-                spawn.y = std::max(spawn.y, ground + radius / std::max(normal.y, 0.25f) + 0.25f);
+                spawn.y = std::max(
+                    spawn.y, ground + radius / std::max(normal.y, 0.25f) + range(0.25f, 5.f));
                 spawn = spawn + velocity * range(0, 1);
                 velocity = { 0, 0, 0 };
                 // Gravity, terrain collision, and fluid interaction plus the water tag.
@@ -1214,9 +1225,8 @@ void Rain::update(double elapsed,
     uniform(compute_, "cloudCoverage", cloud_coverage);
     uniform(compute_, "waterLevel", water_level);
     uniform(compute_, "windSpeed", wind_speed);
-    glUniform2f(glGetUniformLocation(compute_, "windDirection"),
-        wind_direction.x,
-        wind_direction.z);
+    glUniform2f(
+        glGetUniformLocation(compute_, "windDirection"), wind_direction.x, wind_direction.z);
     uniform(compute_, "cloudBase", cloud_base);
     uniform(compute_, "cloudTop", cloud_top);
     uniform(compute_, "time", time);

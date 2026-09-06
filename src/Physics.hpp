@@ -95,7 +95,10 @@ private:
     GLuint blackbody_texture_ = 0;
     double accumulator_ = 0;
     double erosion_readback_accumulator_ = 0;
-    float emission_ = 0;
+    float lava_emission_ = 0;
+    float spring_emission_ = 0;
+    float lava_spawn_rate_ = 90.0f;
+    float spring_spawn_rate_ = 90.0f;
     float particle_lifetime_ = 33.0f;
     float particle_brightness_ = 1.0f;
     float erosion_speed_ = 50.0f;
@@ -131,6 +134,10 @@ public:
     void set_particle_lifetime(float lifetime);
     float particle_brightness() const;
     void set_particle_brightness(float brightness);
+    float lava_spawn_rate() const;
+    void set_lava_spawn_rate(float rate);
+    float spring_spawn_rate() const;
+    void set_spring_spawn_rate(float rate);
     float erosion_speed() const;
     void set_erosion_speed(float speed);
     bool erosion_simulation_enabled() const;
