@@ -194,6 +194,7 @@ void Volcanoes::GpuSimulation::step(float dt,
     float lifetime,
     float water_level,
     float wind_speed,
+    Vec3 wind_direction,
     const std::array<float, max_tornadoes_ * 4>& tornado_centers,
     const std::array<float, max_tornadoes_ * 4>& tornado_movements,
     size_t tornado_count) {
@@ -213,6 +214,9 @@ void Volcanoes::GpuSimulation::step(float dt,
         glUniform1f(glGetUniformLocation(program, "particleLifetime"), lifetime);
         glUniform1f(glGetUniformLocation(program, "waterLevel"), water_level);
         glUniform1f(glGetUniformLocation(program, "windSpeed"), wind_speed);
+        glUniform2f(glGetUniformLocation(program, "windDirection"),
+            wind_direction.x,
+            wind_direction.z);
         glUniform1f(glGetUniformLocation(program, "erosionSpeed"), erosion_speed);
         glUniform1f(
             glGetUniformLocation(program, "terrainDeltaScale"), terrain_delta_scale_);
@@ -622,7 +626,11 @@ void Volcanoes::lightning_water_impact(Vec3 position, size_t particle_count) {
     gpu_.spawn(records);
 }
 
-void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, float wind_speed) {
+void Volcanoes::update(Terrain& terrain,
+    double elapsed,
+    float water_level,
+    float wind_speed,
+    Vec3 wind_direction) {
     constexpr float dt = 1.0f / 120.0f;
     // The shared clock bounds real elapsed time before applying the speed multiplier.
     std::vector<int32_t> erosion_delta;
@@ -762,6 +770,7 @@ void Volcanoes::update(Terrain& terrain, double elapsed, float water_level, floa
             particle_lifetime_,
             water_level,
             wind_speed,
+            wind_direction,
             tornado_centers,
             tornado_movements,
             tornadoes_.size());
@@ -1178,6 +1187,7 @@ void Rain::update(double elapsed,
     float water_level,
     float time,
     float wind_speed,
+    Vec3 wind_direction,
     float cloud_base,
     float cloud_top,
     GLuint terrain_texture,
@@ -1204,6 +1214,9 @@ void Rain::update(double elapsed,
     uniform(compute_, "cloudCoverage", cloud_coverage);
     uniform(compute_, "waterLevel", water_level);
     uniform(compute_, "windSpeed", wind_speed);
+    glUniform2f(glGetUniformLocation(compute_, "windDirection"),
+        wind_direction.x,
+        wind_direction.z);
     uniform(compute_, "cloudBase", cloud_base);
     uniform(compute_, "cloudTop", cloud_top);
     uniform(compute_, "time", time);

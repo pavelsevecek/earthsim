@@ -2,12 +2,24 @@
 layout(local_size_x=16,local_size_y=16) in;
 layout(rg32f,binding=0) readonly uniform image2D stateIn;
 layout(rg32f,binding=1) writeonly uniform image2D stateOut;
+uniform sampler2D terrainHeight;
 uniform float dt;
+uniform float windSpeed;
+uniform float windTime;
+uniform float waterLevel;
+uniform vec2 windDirection;
 
 void main() {
     ivec2 size=imageSize(stateIn);
     ivec2 cell=ivec2(gl_GlobalInvocationID.xy);
     if(any(greaterThanEqual(cell,size))) return;
+
+    vec2 uv=vec2(cell)/vec2(size-1);
+    float groundHeight=textureLod(terrainHeight,uv,0.0).r;
+    if(groundHeight>=waterLevel) {
+        imageStore(stateOut,cell,vec4(0.0));
+        return;
+    }
 
     ivec2 left=ivec2(max(cell.x-1,0),cell.y);
     ivec2 right=ivec2(min(cell.x+1,size.x-1),cell.y);
@@ -20,7 +32,23 @@ void main() {
     const float waveSpeed=75.0;
     const float damping=0.55;
     float laplacian=(neighborHeight-4.0*state.x)/(cellSize*cellSize);
-    state.y+=waveSpeed*waveSpeed*laplacian*dt;
+
+    // Three smooth, mean-zero pressure bands travel with the prevailing wind.
+    // The nonlinear strength mapping remains bounded across the full UI range.
+    const float tau=6.28318530718;
+    float advectionSpeed=min(max(windSpeed,0.0),90.0);
+    vec2 worldPosition=uv*2000.0-1000.0;
+    vec2 pressurePosition=worldPosition-windDirection*(windTime*advectionSpeed);
+    float broad=sin(dot(pressurePosition,normalize(vec2(0.96,0.28)))*tau/220.0+0.4);
+    float medium=sin(dot(pressurePosition,normalize(vec2(0.78,0.63)))*tau/105.0+2.1);
+    float detail=sin(dot(pressurePosition,normalize(vec2(0.99,-0.12)))*tau/48.0+4.2);
+    float gust=0.72+0.28*sin(dot(worldPosition,normalize(vec2(0.37,0.93)))*tau/520.0
+        -windTime*0.45);
+    float windPattern=(0.55*broad+0.30*medium+0.15*detail)*gust;
+    float windCoupling=1.0-exp(-max(windSpeed,0.0)/35.0);
+    float windPressure=60.0*windCoupling*windCoupling*windPattern;
+
+    state.y+=(waveSpeed*waveSpeed*laplacian+windPressure)*dt;
     state.y*=exp(-damping*dt);
     state.x+=state.y*dt;
     imageStore(stateOut,cell,vec4(state,0.0,0.0));

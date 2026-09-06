@@ -127,7 +127,17 @@ WaterRenderer::~WaterRenderer() {
 }
 
 void WaterRenderer::update(
-    double elapsed, const std::vector<Volcanoes::WaterImpact>& impacts) {
+    double elapsed,
+    const std::vector<Volcanoes::WaterImpact>& impacts,
+    bool simulation_enabled,
+    float wind_speed,
+    Vec3 wind_direction,
+    float water_level,
+    GLuint terrain_height_texture) {
+    if (!simulation_enabled) {
+        simulation_accumulator_ = 0.0;
+        return;
+    }
     constexpr GLuint work_group_size = 16;
     constexpr GLuint groups = (resolution_ + work_group_size - 1) / work_group_size;
 
@@ -147,8 +157,19 @@ void WaterRenderer::update(
     simulation_accumulator_ = std::min(simulation_accumulator_ + elapsed, 0.25);
     glUseProgram(simulation_);
     uniform(simulation_, "dt", float(step));
+    uniform(simulation_, "windSpeed", wind_speed);
+    glUniform2f(glGetUniformLocation(simulation_, "windDirection"),
+        wind_direction.x,
+        wind_direction.z);
+    uniform(simulation_, "waterLevel", water_level);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, terrain_height_texture);
+    glUniform1i(glGetUniformLocation(simulation_, "terrainHeight"), 0);
+    GLint wind_time_location = glGetUniformLocation(simulation_, "windTime");
     while (simulation_accumulator_ >= step) {
         simulation_accumulator_ -= step;
+        wind_time_ = std::fmod(wind_time_ + step, 10000.0);
+        glUniform1f(wind_time_location, float(wind_time_));
         int next_state = 1 - state_index_;
         glBindImageTexture(0, states_[state_index_], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32F);
         glBindImageTexture(1, states_[next_state], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RG32F);
@@ -168,7 +189,8 @@ void WaterRenderer::draw(const Mat4& vp,
     float daylight,
     float atmosphere_opacity,
     float water_level,
-    float time) {
+    float time,
+    bool simulation_enabled) {
     glUseProgram(shader_);
     glUniformMatrix4fv(glGetUniformLocation(shader_, "viewProjection"), 1, GL_FALSE, vp.data());
     uniform(shader_, "eye", eye);
@@ -178,6 +200,7 @@ void WaterRenderer::draw(const Mat4& vp,
     uniform(shader_, "atmosphereOpacity", atmosphere_opacity);
     uniform(shader_, "waterLevel", water_level);
     uniform(shader_, "time", time);
+    glUniform1i(glGetUniformLocation(shader_, "simulationEnabled"), simulation_enabled);
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, reflection_texture);
     glUniform1i(glGetUniformLocation(shader_, "reflectionTexture"), 6);
@@ -388,7 +411,7 @@ Clouds::Clouds(const std::filesystem::path& directory, GLuint terrain_texture)
     for (GLuint texture : pressure_volumes_)
         allocate_volume(texture, GL_R16F, GL_RED);
     allocate_volume(divergence_volume_, GL_R16F, GL_RED);
-    reset(10.0f, 290.0f, 530.0f);
+    reset(10.0f, normalize(Vec3{ 0.85f, 0.0f, 0.35f }), 290.0f, 530.0f);
 }
 
 Clouds::~Clouds() {
@@ -447,13 +470,17 @@ void Clouds::clear_density() {
     }
 }
 
-void Clouds::reset(float wind_speed, float cloud_base, float cloud_top) {
+void Clouds::reset(
+    float wind_speed, Vec3 wind_direction, float cloud_base, float cloud_top) {
     glUseProgram(simulation_);
     glUniform3i(glGetUniformLocation(simulation_, "volumeSize"),
         simulation_x_,
         simulation_y_,
         simulation_z_);
     uniform(simulation_, "windSpeed", wind_speed);
+    glUniform2f(glGetUniformLocation(simulation_, "windDirection"),
+        wind_direction.x,
+        wind_direction.z);
     uniform(simulation_, "cloudBase", cloud_base);
     uniform(simulation_, "cloudTop", cloud_top);
     glActiveTexture(GL_TEXTURE4);
@@ -484,6 +511,7 @@ void Clouds::update(double elapsed,
     GLuint particle_buffer,
     bool absorb_vapor,
     float wind_speed,
+    Vec3 wind_direction,
     float cloud_base,
     float cloud_top) {
     constexpr float step = 1.0f / 15.0f;
@@ -523,6 +551,9 @@ void Clouds::update(double elapsed,
         uniform(simulation_, "dt", step);
         uniform(simulation_, "time", time);
         uniform(simulation_, "windSpeed", wind_speed);
+        glUniform2f(glGetUniformLocation(simulation_, "windDirection"),
+            wind_direction.x,
+            wind_direction.z);
         uniform(simulation_, "cloudBase", cloud_base);
         uniform(simulation_, "cloudTop", cloud_top);
         std::array<float, 32> positions{};
@@ -697,6 +728,7 @@ void Clouds::draw(Vec3 eye,
     float time,
     float coverage,
     float wind_speed,
+    Vec3 wind_direction,
     float cloud_base,
     float cloud_top,
     float distance,
@@ -730,6 +762,9 @@ void Clouds::draw(Vec3 eye,
     uniform(shader_, "time", time);
     uniform(shader_, "cloudCoverage", coverage);
     uniform(shader_, "windSpeed", wind_speed);
+    glUniform2f(glGetUniformLocation(shader_, "windDirection"),
+        wind_direction.x,
+        wind_direction.z);
     uniform(shader_, "cloudBase", cloud_base);
     uniform(shader_, "cloudTop", cloud_top);
     uniform(shader_, "aspect", float(width_) / height_);

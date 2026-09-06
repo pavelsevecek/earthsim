@@ -9,9 +9,9 @@ uniform vec3 eye, cameraForward, cameraRight, cameraUp;
 uniform vec3 sunDirection, fogColor;
 uniform float aspect, tanHalfFov, daylight, atmosphereOpacity, cloudOpacity, time, cloudCoverage;
 uniform float windSpeed, cloudBase, cloudTop;
+uniform vec2 windDirection;
 vec3 boxMin() { return vec3(-2200.0, cloudBase, -2200.0); }
 vec3 boxMax() { return vec3(2200.0, cloudTop, 2200.0); }
-const vec2 prevailingWind = normalize(vec2(0.85, 0.35));
 
 float hazeAmount(float distanceToEye) {
     float distanceBeyondClearAir=max(distanceToEye-300.0,0.0);
@@ -32,7 +32,7 @@ float density(vec3 p) {
     float edge = 1.0 - smoothstep(1700.0, 2200.0, max(abs(p.x), abs(p.z)));
     vec3 volumeUv=(p-boxMin())/(boxMax()-boxMin());
     float simulatedShape=texture(cloudDensityTexture,volumeUv).r;
-    vec2 advected=p.xz-prevailingWind*(time*windSpeed*0.17);
+    vec2 advected=p.xz-windDirection*(time*windSpeed*0.17);
     float fineDetail=cloudNoise3D(vec3(advected.x,p.y,advected.y)*0.029+19.0);
     float shape=clamp(simulatedShape+(fineDetail-0.5)*0.10,0.0,1.0);
     float threshold=mix(0.68,0.18,cloudCoverage);

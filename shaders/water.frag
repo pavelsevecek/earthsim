@@ -1,6 +1,7 @@
 #version 330 core
 in vec3 worldPosition;
 in vec3 surfaceNormal;
+in float waterVelocity;
 uniform vec3 sunDirection;
 uniform vec3 eye;
 uniform vec3 fogColor;
@@ -79,12 +80,18 @@ void main() {
     float groundHeight=texture(terrainHeight,worldPosition.xz/2000.0+0.5).r;
     float waterDepth=worldPosition.y-groundHeight;
     vec2 foamPosition=worldPosition.xz*0.085;
-    float broad=foamNoise(foamPosition+vec2(time*0.10,-time*0.07));
-    float detail=foamNoise(foamPosition*2.7+vec2(-time*0.19,time*0.13));
+    float broad=foamNoise(foamPosition*2.4+vec2(time*0.10,-time*0.07));
+    float detail=foamNoise(foamPosition*4+vec2(-time*0.19,time*0.13));
     float brokenPattern=0.68*broad+0.32*detail;
     float advancingWave=0.5+0.5*sin(waterDepth*1.35-time*1.6+broad*5.0);
     float shoreline=smoothstep(0.05,0.9,waterDepth)*(1.0-smoothstep(2.0,11.0,waterDepth));
-    float foam=shoreline*smoothstep(0.38,0.68,brokenPattern*0.72+advancingWave*0.28);
+    float shorelineFoam=shoreline
+        *smoothstep(0.38,0.68,brokenPattern*0.72+advancingWave*0.28);
+    // Fast vertical motion entrains air and breaks the surface. Noise keeps the
+    // resulting white water patchy instead of forming a uniform circular band.
+    float motionStrength=smoothstep(10.0,36.0,abs(waterVelocity));
+    float motionFoam=motionStrength*smoothstep(0.30,0.68,brokenPattern);
+    float foam=1.0-(1.0-shorelineFoam)*(1.0-motionFoam);
     vec3 foamColor=mix(vec3(0.025,0.04,0.065),vec3(0.78,0.90,0.96),daylight);
     color=mix(color,foamColor,foam*0.92);
     alpha=1.0-(1.0-alpha)*(1.0-foam*0.86);

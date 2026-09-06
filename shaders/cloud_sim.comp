@@ -14,6 +14,7 @@ uniform int pass;
 uniform float dt;
 uniform float time;
 uniform float windSpeed;
+uniform vec2 windDirection;
 uniform float cloudBase;
 uniform float cloudTop;
 uniform int meteorCount;
@@ -55,7 +56,7 @@ void main() {
     if(pass==0) {
         float density=world.y<=terrainSurface(world)?0.0:initialDensity(world);
         imageStore(densityImage,p,vec4(density));
-        vec2 wind=normalize(vec2(0.85,0.35))*windSpeed;
+        vec2 wind=windDirection*windSpeed;
         imageStore(velocityImage,p,vec4(wind.x,0.0,wind.y,0.0));
         imageStore(scalarImage,p,vec4(0.0));
         return;
@@ -68,7 +69,7 @@ void main() {
         vec3 previousUv=wrapUv(uv-oldVelocity*dt/(boxMax()-boxMin()));
         vec3 velocity=texture(velocityTexture,previousUv).xyz;
         float density=texture(densityTexture,uv).r;
-        vec2 horizontalWind=normalize(vec2(0.85,0.35))*windSpeed;
+        vec2 horizontalWind=windDirection*windSpeed;
         vec3 targetWind=vec3(horizontalWind.x,0.0,horizontalWind.y);
         velocity=mix(velocity,targetWind,1.0-exp(-0.16*dt));
         vec3 turbulence=vec3(sin(world.z*0.018+time*0.73)+cos(world.y*0.041-time*0.51),

@@ -9,6 +9,7 @@ uniform float dt;
 uniform float particleLifetime;
 uniform float waterLevel;
 uniform float windSpeed;
+uniform vec2 windDirection;
 uniform int tornadoCount;
 uniform vec4 tornadoCenterId[8];
 uniform vec4 tornadoMovementHeight[8];
@@ -72,7 +73,7 @@ void main() {
         }
     }
     if((flags&8u)!=0u) {
-        vec2 windVelocity=normalize(vec2(0.85,0.35))*windSpeed;
+        vec2 windVelocity=windDirection*windSpeed;
         particles[id].velocityLife.xz=mix(particles[id].velocityLife.xz,
             windVelocity,1.0-exp(-0.8*dt));
     } else if((flags&32u)!=0u) {
@@ -83,9 +84,12 @@ void main() {
             particles[id].velocityLife.xyz*=exp(-0.18*dt);
         }
         float windStrength=smoothstep(20.0,260.0,particles[id].positionAge.y);
-        vec2 windDirection=normalize(vec2(0.85+0.3*sin(particles[id].positionAge.z*0.012),
-            0.35+0.3*cos(particles[id].positionAge.x*0.01)));
-        particles[id].velocityLife.xz+=windDirection*(2.4*(windSpeed/10.0)*windStrength*dt);
+        vec2 crossWind=vec2(-windDirection.y,windDirection.x);
+        float variation=0.3*(sin(particles[id].positionAge.z*0.012)
+            +cos(particles[id].positionAge.x*0.01));
+        vec2 localWindDirection=normalize(windDirection+crossWind*variation);
+        particles[id].velocityLife.xz+=localWindDirection
+            *(2.4*(windSpeed/10.0)*windStrength*dt);
         particles[id].velocityLife.xz*=exp(-0.12*dt);
     } else if((flags&1u)!=0u) particles[id].velocityLife.y-=12.0*dt;
     particles[id].positionAge.xyz+=particles[id].velocityLife.xyz*dt;

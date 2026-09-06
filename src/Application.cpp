@@ -95,6 +95,7 @@ class AppState {
     float cloud_coverage_ = 0.5f;
     float cloud_opacity_ = 0.4f;
     float wind_speed_ = 10.0f;
+    float wind_direction_ = std::atan2(0.35f, 0.85f);
     float cloud_base_ = 290.0f;
     static constexpr float cloud_thickness_ = 240.0f;
     float camera_exposure_ = 0.0f;
@@ -102,6 +103,7 @@ class AppState {
     bool clouds_enabled_ = true;
     bool cloud_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
+    bool water_simulation_enabled_ = true;
     bool bloom_enabled_ = true;
     bool ssgi_enabled_ = false;
     bool source_icons_visible_ = true;
@@ -169,10 +171,18 @@ void AppState::frame() {
     simulation_time_ += elapsed;
     if (!day_night_paused_)
         day_time_ += elapsed;
+    Vec3 wind_direction{ std::cos(wind_direction_), 0.0f, std::sin(wind_direction_) };
     float cloud_top = cloud_base_ + cloud_thickness_;
     if (particle_simulation_enabled_)
-        volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_);
-    water_renderer_.update(elapsed, volcanoes_.take_water_impacts());
+        volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_, wind_direction);
+    water_renderer_.update(
+        elapsed,
+        volcanoes_.take_water_impacts(),
+        water_simulation_enabled_,
+        wind_speed_,
+        wind_direction,
+        water_level_,
+        volcanoes_.terrain_texture());
     lightning_.update(terrain_, elapsed, water_level_, cloud_base_, cloud_top, volcanoes_);
     static const std::vector<Volcanoes::Meteor> no_moving_meteors;
     if (cloud_simulation_enabled_)
@@ -182,6 +192,7 @@ void AppState::frame() {
             volcanoes_.particle_buffer(),
             particle_simulation_enabled_,
             wind_speed_,
+            wind_direction,
             cloud_base_,
             cloud_top);
     int framebuffer_width = 0;
@@ -308,6 +319,7 @@ void AppState::frame() {
             water_level_,
             float(simulation_time_),
             wind_speed_,
+            wind_direction,
             cloud_base_,
             cloud_top,
             volcanoes_.terrain_texture(),
@@ -494,7 +506,8 @@ void AppState::frame() {
         daylight,
         atmosphere_opacity_,
         water_level_,
-        float(simulation_time_));
+        float(simulation_time_),
+        water_simulation_enabled_);
     bool vapor_after_clouds = clouds_enabled_ && eye.y < cloud_base_;
     if (!vapor_after_clouds)
         rain_.draw(vp, eye, right, up, daylight);
@@ -539,6 +552,7 @@ void AppState::frame() {
             float(simulation_time_),
             cloud_coverage_,
             wind_speed_,
+            wind_direction,
             cloud_base_,
             cloud_top,
             distance_,
@@ -787,6 +801,7 @@ void AppState::frame() {
         1.0f,
         "%.2f",
         ImGuiSliderFlags_AlwaysClamp);
+    ImGui::Checkbox("Water simulation", &water_simulation_enabled_);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Water level", &water_level_, -100.0f, 250.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
@@ -805,7 +820,7 @@ void AppState::frame() {
         clouds_.clear_density();
     ImGui::SameLine();
     if (ImGui::Button("Reset clouds"))
-        clouds_.reset(wind_speed_, cloud_base_, cloud_top);
+        clouds_.reset(wind_speed_, wind_direction, cloud_base_, cloud_top);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Cloud coverage", &cloud_coverage_, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -815,6 +830,13 @@ void AppState::frame() {
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Wind speed", &wind_speed_, 0.0f, 500.0f, "%.1f units/s", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderAngle("Wind direction",
+        &wind_direction_,
+        -180.0f,
+        180.0f,
+        "%.0f deg",
+        ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Cloud height", &cloud_base_, 0.0f, 1000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);

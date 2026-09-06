@@ -64,6 +64,7 @@ private:
             float lifetime,
             float water_level,
             float wind_speed,
+            Vec3 wind_direction,
             const std::array<float, max_tornadoes_ * 4>& tornado_centers,
             const std::array<float, max_tornadoes_ * 4>& tornado_movements,
             size_t tornado_count);
@@ -141,7 +142,8 @@ public:
     void impact(Terrain& terrain, Vec3 position, float size_scale);
     void water_impact(Vec3 position, float size_scale);
     void lightning_water_impact(Vec3 position, size_t particle_count);
-    void update(Terrain& terrain, double elapsed, float water_level, float wind_speed);
+    void update(
+        Terrain& terrain, double elapsed, float water_level, float wind_speed, Vec3 wind_direction);
     void prepare_draw(const Mat4& vp,
         const Mat4& light_vp,
         GLuint shadow_map,
@@ -266,6 +268,7 @@ public:
         float water_level,
         float time,
         float wind_speed,
+        Vec3 wind_direction,
         float cloud_base,
         float cloud_top,
         GLuint terrain_texture,

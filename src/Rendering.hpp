@@ -54,11 +54,18 @@ class WaterRenderer {
     int state_index_ = 0;
     GLsizei index_count_ = 0;
     double simulation_accumulator_ = 0.0;
+    double wind_time_ = 0.0;
 
 public:
     explicit WaterRenderer(const std::filesystem::path& directory);
     ~WaterRenderer();
-    void update(double elapsed, const std::vector<Volcanoes::WaterImpact>& impacts);
+    void update(double elapsed,
+        const std::vector<Volcanoes::WaterImpact>& impacts,
+        bool simulation_enabled,
+        float wind_speed,
+        Vec3 wind_direction,
+        float water_level,
+        GLuint terrain_height_texture);
     void draw(const Mat4& vp,
         const Mat4& reflection_vp,
         GLuint reflection_texture,
@@ -69,7 +76,8 @@ public:
         float daylight,
         float atmosphere_opacity,
         float water_level,
-        float time);
+        float time,
+        bool simulation_enabled);
 };
 
 class TerrainShadows {
@@ -126,13 +134,14 @@ public:
     GLuint scene_depth_texture() const;
     GLuint scene_emission_texture() const;
     void clear_density();
-    void reset(float wind_speed, float cloud_base, float cloud_top);
+    void reset(float wind_speed, Vec3 wind_direction, float cloud_base, float cloud_top);
     void update(double elapsed,
         float time,
         const std::vector<Volcanoes::Meteor>& meteors,
         GLuint particle_buffer,
         bool absorb_vapor,
         float wind_speed,
+        Vec3 wind_direction,
         float cloud_base,
         float cloud_top);
     void begin_scene(int w, int h);
@@ -150,6 +159,7 @@ public:
         float time,
         float coverage,
         float wind_speed,
+        Vec3 wind_direction,
         float cloud_base,
         float cloud_top,
         float distance,

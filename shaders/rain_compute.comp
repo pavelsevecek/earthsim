@@ -18,13 +18,13 @@ uniform float cloudCoverage;
 uniform float time;
 uniform float waterLevel;
 uniform float windSpeed;
+uniform vec2 windDirection;
 uniform float cloudBase;
 uniform float cloudTop;
 uniform vec3 eye;
 const uint wetnessSize=256u;
 const uint bucketCount=32768u;
 const float support=4.0;
-const vec2 windDirection=normalize(vec2(0.85,0.35));
 
 uint hash(uint x) {
     x^=x>>16u; x*=0x7feb352du; x^=x>>15u; x*=0x846ca68bu; return x^(x>>16u);
