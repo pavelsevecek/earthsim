@@ -4,8 +4,46 @@
 
 #include <imgui_impl_opengl3.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 namespace earth_sim {
 namespace {
+    GLuint load_texture(const std::filesystem::path& file) {
+        int width = 0;
+        int height = 0;
+        int components = 0;
+        unsigned char* pixels = stbi_load(file.string().c_str(), &width, &height, &components, 4);
+        if (!pixels)
+            throw std::runtime_error(
+                "Cannot load image " + file.string() + ": " + stbi_failure_reason());
+
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        stbi_image_free(pixels);
+        return texture;
+    }
+
+    std::filesystem::path asset_file(
+        const std::filesystem::path& shader_directory, const char* name) {
+        auto adjacent = shader_directory.parent_path() / "assets" / name;
+        if (std::filesystem::is_regular_file(adjacent))
+            return adjacent;
+        auto working_directory = std::filesystem::absolute(std::filesystem::path("assets") / name);
+        if (std::filesystem::is_regular_file(working_directory))
+            return working_directory;
+        throw std::runtime_error("Cannot find UI asset: " + std::string(name));
+    }
+
     bool world_to_screen(Vec3 position,
         Vec3 eye,
         Vec3 forward,
@@ -142,6 +180,7 @@ class AppState {
     float brush_radius_ = 85.0f;
     float terrain_step_magnitude_ = 1.0f;
     float particle_spacing_ = 3.0f;
+    GLuint placement_tools_texture_ = 0;
     double previous_;
     double simulation_time_ = 0.0;
     double day_time_ = 0.0;
@@ -163,7 +202,15 @@ public:
         , screen_space_gi_(directory_)
         , reflection_()
         , bloom_(directory_)
-        , previous_(glfwGetTime()) {}
+        , previous_(glfwGetTime()) {
+        placement_tools_texture_ =
+            load_texture(asset_file(directory_, "placement-tools.png"));
+    }
+
+    ~AppState() {
+        if (placement_tools_texture_)
+            glDeleteTextures(1, &placement_tools_texture_);
+    }
 
     void frame();
 };
@@ -306,7 +353,7 @@ void AppState::frame() {
             volcanoes_.remove_spring_source(selected_source_index_);
         selected_source_type_ = SourceType::None;
     }
-    double wrapped_day = std::fmod(day_time_ / 60.0 + day_phase_offset_, 1.0);
+    double wrapped_day = std::fmod(day_time_ / 360.0 + day_phase_offset_, 1.0);
     if (wrapped_day < 0.0)
         wrapped_day += 1.0;
     float day = float(wrapped_day);
@@ -652,13 +699,112 @@ void AppState::frame() {
         }
     }
 
-    ImGui::SetNextWindowPos(ImVec2(20 * ui_scale, 20 * ui_scale), ImGuiCond_Always);
+    constexpr float toolbar_height = 58.0f;
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, toolbar_height * ui_scale), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.90f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding, ImVec2(10.0f * ui_scale, 7.0f * ui_scale));
+    ImGui::Begin("Placement toolbar",
+        nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoMove);
+
+    struct ToolButton {
+        PlacementTool tool;
+        const char* id;
+        const char* tooltip;
+        int atlas_cell;
+    };
+    const ToolButton tools[] = {
+        { PlacementTool::Volcano, "##volcano", "Create volcano", 0 },
+        { PlacementTool::Spring, "##spring", "Create spring", 1 },
+        { PlacementTool::Meteor, "##meteor", "Meteor strike", 2 },
+        { PlacementTool::Explosion, "##explosion", "Explosion", 3 },
+        { PlacementTool::TornadoOrigin, "##tornado", "Create tornado", 4 },
+        { PlacementTool::TerrainUp, "##terrain-up", "Raise terrain", 5 },
+        { PlacementTool::TerrainDown, "##terrain-down", "Lower terrain", 6 },
+        { PlacementTool::FlattenTerrain, "##flatten", "Flatten terrain", 7 },
+        { PlacementTool::RoughenTerrain, "##roughen", "Roughen terrain", 8 },
+        { PlacementTool::AddWater, "##water", "Add water", 9 },
+        { PlacementTool::AddLava, "##lava", "Add lava", 10 },
+    };
+    const ImTextureID placement_texture =
+        static_cast<ImTextureID>(static_cast<intptr_t>(placement_tools_texture_));
+    const ImVec2 icon_size(36.0f * ui_scale, 36.0f * ui_scale);
+    for (const ToolButton& button : tools) {
+        int column = button.atlas_cell % 4;
+        int row = button.atlas_cell / 4;
+        ImVec2 uv0(float(column) / 4.0f, float(row) / 3.0f);
+        ImVec2 uv1(float(column + 1) / 4.0f, float(row + 1) / 3.0f);
+        bool selected = placement_ == button.tool ||
+                        (button.tool == PlacementTool::TornadoOrigin &&
+                            placement_ == PlacementTool::TornadoDirection);
+        if (selected)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::ImageButton(button.id, placement_texture, icon_size, uv0, uv1)) {
+            placement_ = button.tool;
+            placement_miss_ = false;
+            panning_ = false;
+        }
+        if (selected)
+            ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", button.tooltip);
+        ImGui::SameLine();
+    }
+
+    ImGui::AlignTextToFramePadding();
+    if (placement_ == PlacementTool::None) {
+        ImGui::TextDisabled("Select a placement tool");
+    } else {
+        const char* placement_prompt =
+            placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."
+            : placement_ == PlacementTool::Spring ? "Click terrain to place a spring."
+            : placement_ == PlacementTool::Meteor ? "Click terrain to target a meteor."
+            : placement_ == PlacementTool::Explosion ? "Click terrain to detonate an explosion."
+            : placement_ == PlacementTool::TornadoOrigin ? "Click terrain to set the tornado origin."
+            : placement_ == PlacementTool::TornadoDirection
+                ? "Click terrain to set the tornado direction."
+            : placement_ == PlacementTool::TerrainUp ? "Click terrain to raise it."
+            : placement_ == PlacementTool::TerrainDown ? "Click terrain to lower it."
+            : placement_ == PlacementTool::FlattenTerrain ? "Click terrain to flatten it."
+            : placement_ == PlacementTool::RoughenTerrain ? "Click terrain to roughen it."
+            : placement_ == PlacementTool::AddWater ? "Click terrain to add water."
+                                                    : "Click terrain to add lava.";
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(placement_prompt);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Cancel placement")) {
+            placement_ = PlacementTool::None;
+            placement_miss_ = false;
+        }
+        if (placement_miss_)
+            ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1),
+                "No terrain here. Choose a point on the landscape.");
+        else if (placement_ == PlacementTool::TornadoDirection)
+            ImGui::TextDisabled("Choose a point at least 5 units from the origin.");
+        else
+            ImGui::TextDisabled("Esc cancels placement.");
+        ImGui::EndGroup();
+    }
+    const ImVec2 close_button_size(36.0f * ui_scale, 36.0f * ui_scale);
+    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - close_button_size.x - 10.0f * ui_scale,
+        7.0f * ui_scale));
+    if (ImGui::Button("X", close_button_size))
+        glfwSetWindowShouldClose(window_, GLFW_TRUE);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+
+    ImGui::SetNextWindowPos(
+        ImVec2(20 * ui_scale, (toolbar_height + 14.0f) * ui_scale), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.78f);
     //ImGuiViewport* viewport = ImGui::GetMainViewport();
     //ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x / 2, viewport->WorkSize.y - 10), ImGuiCond_Always);
-    ImGui::Begin("EarthSim",
+    ImGui::Begin("##EarthSim",
         nullptr,
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+        ImGuiWindowFlags_NoResize | 
             ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     float time_of_day_hours = day * 24.0f;
@@ -695,80 +841,6 @@ void AppState::frame() {
     ImGui::Text("Active tornadoes: %d", int(volcanoes_.tornado_count()));
     if (ImGui::Button(source_icons_visible_ ? "Hide source icons" : "Show source icons"))
         source_icons_visible_ = !source_icons_visible_;
-    if (ImGui::Button("Create volcano")) {
-        placement_ = PlacementTool::Volcano;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Create spring")) {
-        placement_ = PlacementTool::Spring;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Meteor strike")) {
-        placement_ = PlacementTool::Meteor;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Explosion")) {
-        placement_ = PlacementTool::Explosion;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Create tornado")) {
-        placement_ = PlacementTool::TornadoOrigin;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-
-
-    if (ImGui::Button("Terrain up")) {
-        placement_ = PlacementTool::TerrainUp;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Terrain down")) {
-        placement_ = PlacementTool::TerrainDown;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-
-    if (ImGui::Button("Flatten terrain")) {
-        placement_ = PlacementTool::FlattenTerrain;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Roughen terrain")) {
-        placement_ = PlacementTool::RoughenTerrain;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-
-    if (ImGui::Button("Add water")) {
-        placement_ = PlacementTool::AddWater;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Add lava")) {
-        placement_ = PlacementTool::AddLava;
-        placement_miss_ = false;
-        panning_ = false;
-    }
-    ImGui::SameLine();
-
-    if (ImGui::Button("None")) {
-        placement_ = PlacementTool::None;
-        placement_miss_ = false;
-        panning_ = false;
-    }
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Meteor size", &meteor_size_, 0.1f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
@@ -806,35 +878,6 @@ void AppState::frame() {
     if (ImGui::DragFloat(
             "Spring spawn rate", &spring_spawn_rate, 1.0f, 0.0f, 1000.0f, "%.1f / s"))
         volcanoes_.set_spring_spawn_rate(spring_spawn_rate);
-    if (placement_ != PlacementTool::None) {
-        const char* placement_prompt =
-            placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."
-            : placement_ == PlacementTool::Spring ? "Click terrain to place a spring."
-            : placement_ == PlacementTool::Meteor ? "Click terrain to target a meteor."
-            : placement_ == PlacementTool::Explosion ? "Click terrain to detonate an explosion."
-            : placement_ == PlacementTool::TornadoOrigin
-                ? "Click terrain to set the tornado origin."
-            : placement_ == PlacementTool::TornadoDirection
-                ? "Click terrain to set the tornado direction."
-            : placement_ == PlacementTool::TerrainUp   ? "Click terrain to raise it."
-            : placement_ == PlacementTool::TerrainDown ? "Click terrain to lower it."
-            : placement_ == PlacementTool::FlattenTerrain
-                ? "Click terrain to level it toward the brush's average height."
-            : placement_ == PlacementTool::RoughenTerrain
-                ? "Click terrain to exaggerate differences from the brush's average height."
-            : placement_ == PlacementTool::AddWater ? "Click terrain to add water."
-                                                    : "Click terrain to add lava.";
-        ImGui::TextUnformatted(placement_prompt);
-        ImGui::TextDisabled("Esc cancels placement.");
-        if (ImGui::Button("Cancel placement")) {
-            placement_ = PlacementTool::None;
-            placement_miss_ = false;
-        }
-        if (placement_miss_)
-            ImGui::TextColored(ImVec4(1, 0.65f, 0.3f, 1), "No terrain here. Click the landscape.");
-        else if (placement_ == PlacementTool::TornadoDirection)
-            ImGui::TextDisabled("Choose a point at least 5 units from the origin.");
-    }
     ImGui::SetNextItemWidth(180 * ui_scale);
     float particle_lifetime = volcanoes_.particle_lifetime();
     if (ImGui::DragFloat("Particle life", &particle_lifetime, 1.f, 1.0f, 3600.0f, "%.1f s"))
@@ -913,18 +956,6 @@ void AppState::frame() {
         "rotate\nScroll to zoom\nEsc to exit");
     ImGui::Text("FPS: %.1f", io.Framerate);
     ImGui::End();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x, 0.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.78f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    ImGui::Begin("EarthSim quit",
-        nullptr,
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-    if (ImGui::Button("X", ImVec2(36.0f * ui_scale, 30.0f * ui_scale)))
-        glfwSetWindowShouldClose(window_, GLFW_TRUE);
-    ImGui::End();
-    ImGui::PopStyleVar(2);
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window_);

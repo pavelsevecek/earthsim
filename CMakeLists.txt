@@ -49,7 +49,7 @@ add_executable(EarthSim
     src/Terrain.cpp
     src/Terrain.hpp)
 target_compile_features(EarthSim PRIVATE cxx_std_17)
-target_include_directories(EarthSim PRIVATE externals/glew/include)
+target_include_directories(EarthSim PRIVATE externals/glew/include externals)
 if(WIN32)
     target_compile_definitions(EarthSim PRIVATE GLEW_STATIC)
 endif()
@@ -61,5 +61,12 @@ add_custom_target(earthsim_shaders ALL
     COMMENT "Copying EarthSim shader files"
     VERBATIM)
 add_dependencies(EarthSim earthsim_shaders)
+add_custom_target(earthsim_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:EarthSim>/assets"
+    COMMENT "Copying EarthSim UI assets"
+    VERBATIM)
+add_dependencies(EarthSim earthsim_assets)
 install(TARGETS EarthSim RUNTIME DESTINATION .)
 install(DIRECTORY shaders DESTINATION .)
+install(DIRECTORY assets DESTINATION .)

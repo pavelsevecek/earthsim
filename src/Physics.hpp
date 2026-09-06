@@ -37,7 +37,7 @@ private:
         static constexpr uint32_t capacity_ = 16000;
         static constexpr uint32_t buckets_ = 32768;
         static constexpr uint32_t terrain_size_ = Terrain::cell_count() + 1;
-        static constexpr uint32_t scorched_size_ = 2048;
+        static constexpr uint32_t scorched_size_ = 1024;
         // Particle contributions are quantized individually before atomic addition.
         // Nanometre-scale fixed point preserves slow-flow contributions until the
         // asynchronous 100 ms batches are accumulated on the CPU.
