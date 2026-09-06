@@ -99,13 +99,14 @@ uint32_t random_terrain_seed() {
 }
 
 
-Terrain::Terrain(uint32_t seed) {
+void Terrain::generate(uint32_t seed) {
     terrain_seed = seed;
     generate_mountain_ranges(terrain_seed);
+    heights_.clear();
+    pending_height_deltas_.clear();
     heights_.reserve((cells_ + 1) * (cells_ + 1));
-    std::vector<uint32_t> indices;
+    vertices_.clear();
     vertices_.reserve((cells_ + 1) * (cells_ + 1));
-    indices.reserve(cells_ * cells_ * 6);
     for (int z = 0; z <= cells_; ++z)
         for (int x = 0; x <= cells_; ++x) {
             float px = -1000 + x * step_;
@@ -116,6 +117,15 @@ Terrain::Terrain(uint32_t seed) {
             vertices_.push_back({ { px, height(px, pz), pz }, n });
             heights_.push_back(vertices_.back().position.y);
         }
+    auto bounds = std::minmax_element(heights_.begin(), heights_.end());
+    min_height_ = *bounds.first;
+    max_height_ = *bounds.second;
+}
+
+Terrain::Terrain(uint32_t seed) {
+    generate(seed);
+    std::vector<uint32_t> indices;
+    indices.reserve(cells_ * cells_ * 6);
     for (int z = 0; z < cells_; ++z)
         for (int x = 0; x < cells_; ++x) {
             uint32_t a = uint32_t(z * (cells_ + 1) + x);
@@ -124,9 +134,6 @@ Terrain::Terrain(uint32_t seed) {
             uint32_t d = c + 1;
             indices.insert(indices.end(), { a, c, b, b, c, d });
         }
-    auto bounds = std::minmax_element(heights_.begin(), heights_.end());
-    min_height_ = *bounds.first;
-    max_height_ = *bounds.second;
     count_ = GLsizei(indices.size());
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
@@ -157,6 +164,11 @@ Terrain::~Terrain() {
     glDeleteBuffers(1, &ebo_);
     glDeleteBuffers(1, &vbo_);
     glDeleteVertexArrays(1, &vao_);
+}
+
+void Terrain::reseed(uint32_t seed) {
+    generate(seed);
+    update_geometry();
 }
 
 void Terrain::draw() const {

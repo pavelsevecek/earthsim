@@ -58,6 +58,7 @@ private:
         explicit GpuSimulation(const std::filesystem::path& directory, const Terrain& terrain);
         ~GpuSimulation();
         void upload_terrain(const Terrain& terrain);
+        void reset_terrain(const Terrain& terrain);
         void spawn(const std::vector<GpuParticle>& records);
         bool schedule_erosion_readback();
         bool consume_erosion_readback(std::vector<int32_t>& deltas);
@@ -114,6 +115,7 @@ private:
 public:
     explicit Volcanoes(const std::filesystem::path& directory, const Terrain& terrain);
     ~Volcanoes();
+    void reset_for_new_terrain(const Terrain& terrain);
     void launch_meteor(Vec3 target, float size_scale);
     void terrain_changed(Terrain& terrain);
     void add_volcano(Vec3 position);

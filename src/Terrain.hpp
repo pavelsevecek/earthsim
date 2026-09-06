@@ -24,11 +24,13 @@ class Terrain {
     GLuint vbo_ = 0;
     GLuint ebo_ = 0;
     GLsizei count_ = 0;
+    void generate(uint32_t seed);
     void adjust_roughness(Vec3 center, float radius, float magnitude, bool roughen);
 
 public:
     explicit Terrain(uint32_t seed);
     ~Terrain();
+    void reseed(uint32_t seed);
     void update_geometry();
     bool apply_height_deltas(const std::vector<int32_t>& deltas, float scale);
     void deform(Vec3 center, float radius, float elevation);

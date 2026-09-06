@@ -562,7 +562,8 @@ void AppState::frame() {
                             { position.x, water_level_, position.z }, physical_size);
                         explosions_.explode(position, physical_size);
                     }
-                    placement_ = PlacementTool::None;
+                    if (placement_ != PlacementTool::Meteor)
+                        placement_ = PlacementTool::None;
                     placement_miss_ = false;
                 }
             }
@@ -839,6 +840,13 @@ void AppState::frame() {
     ImGui::Text("Active volcanoes: %d", int(volcanoes_.volcano_count()));
     ImGui::Text("Active springs: %d", int(volcanoes_.spring_count()));
     ImGui::Text("Active tornadoes: %d", int(volcanoes_.tornado_count()));
+    if (ImGui::Button("Reset terrain")) {
+        terrain_.reseed(random_terrain_seed());
+        volcanoes_.reset_for_new_terrain(terrain_);
+        selected_source_type_ = SourceType::None;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Generate new terrain and remove all volcanoes, springs, and scorching");
     if (ImGui::Button(source_icons_visible_ ? "Hide source icons" : "Show source icons"))
         source_icons_visible_ = !source_icons_visible_;
     ImGui::SetNextItemWidth(180 * ui_scale);

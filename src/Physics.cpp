@@ -132,6 +132,34 @@ void Volcanoes::GpuSimulation::upload_terrain(const Terrain& terrain) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+void Volcanoes::GpuSimulation::reset_terrain(const Terrain& terrain) {
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
+    upload_terrain(terrain);
+
+    const int32_t zero_int = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_delta);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero_int);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_flow);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero_int);
+    for (auto& readback : erosion_readbacks) {
+        if (readback.fence)
+            glDeleteSync(readback.fence);
+        readback.fence = nullptr;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, scorched_texture);
+    std::vector<uint32_t> unscorched(size_t(scorched_size_) * scorched_size_);
+    glTexSubImage2D(GL_TEXTURE_2D,
+        0,
+        0,
+        0,
+        scorched_size_,
+        scorched_size_,
+        GL_RED_INTEGER,
+        GL_UNSIGNED_INT,
+        unscorched.data());
+}
+
 void Volcanoes::GpuSimulation::spawn(const std::vector<GpuParticle>& records) {
     if (records.empty())
         return;
@@ -356,6 +384,15 @@ Volcanoes::~Volcanoes() {
     glDeleteBuffers(1, &vbo_);
     glDeleteVertexArrays(1, &vao_);
     glDeleteProgram(shader_);
+}
+
+void Volcanoes::reset_for_new_terrain(const Terrain& terrain) {
+    vents_.clear();
+    springs_.clear();
+    lava_emission_ = 0;
+    spring_emission_ = 0;
+    erosion_readback_accumulator_ = 0;
+    gpu_.reset_terrain(terrain);
 }
 
 void Volcanoes::launch_meteor(Vec3 target, float size_scale) {
