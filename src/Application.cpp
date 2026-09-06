@@ -146,6 +146,7 @@ class AppState {
     bool water_simulation_enabled_ = true;
     bool bloom_enabled_ = true;
     bool ssgi_enabled_ = false;
+    bool camera_shake_enabled_ = true;
     bool source_icons_visible_ = true;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
@@ -153,6 +154,8 @@ class AppState {
     float meteor_size_ = 1.0f;
     float explosion_size_ = 1.0f;
     static constexpr float explosion_size_scale_ = 0.65f;
+    float camera_shake_strength_ = 0.0f;
+    double camera_shake_time_ = 0.0;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
@@ -219,7 +222,8 @@ void AppState::frame() {
 
     double now = glfwGetTime();
     // Bound stall recovery consistently for the sky, clouds, and particle physics.
-    double elapsed = std::clamp(now - previous_, 0.0, 0.1) * double(time_speed_);
+    double frame_elapsed = std::clamp(now - previous_, 0.0, 0.1);
+    double elapsed = frame_elapsed * double(time_speed_);
     previous_ = now;
     simulation_time_ += elapsed;
     if (!day_night_paused_)
@@ -228,6 +232,15 @@ void AppState::frame() {
     float cloud_top = cloud_base_ + cloud_thickness_;
     if (particle_simulation_enabled_)
         volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_, wind_direction);
+    auto impact_strengths = volcanoes_.take_impact_strengths();
+    if (camera_shake_enabled_) {
+        for (float strength : impact_strengths)
+            camera_shake_strength_ =
+                std::sqrt(camera_shake_strength_ * camera_shake_strength_ + strength * strength);
+    } else
+        camera_shake_strength_ = 0.0f;
+    camera_shake_time_ += frame_elapsed;
+    camera_shake_strength_ *= std::exp(-5.0f * float(frame_elapsed));
     water_renderer_.update(
         elapsed,
         volcanoes_.take_water_impacts(),
@@ -316,6 +329,19 @@ void AppState::frame() {
                   up * (io.MouseDelta.y * units_per_pixel);
     }
     Vec3 eye = target_ + orbit * distance_;
+    if (camera_shake_enabled_ && camera_shake_strength_ > 0.001f) {
+        // High-frequency, non-repeating local rotations feel like an impact without
+        // disturbing the orbit camera's persistent target, yaw, or pitch.
+        float t = float(camera_shake_time_);
+        float amplitude = 0.012f * camera_shake_strength_;
+        float shake_yaw = std::sin(t * 37.0f) * amplitude;
+        float shake_pitch = std::sin(t * 53.0f + 1.7f) * amplitude * 0.8f;
+        float shake_roll = std::sin(t * 43.0f + 3.1f) * amplitude * 0.6f;
+        forward = normalize(forward + right * shake_yaw + up * shake_pitch);
+        Vec3 rolled_up = normalize(up + right * shake_roll);
+        right = normalize(cross(forward, rolled_up));
+        up = cross(right, forward);
+    }
     if (source_icons_visible_ && placement_ == PlacementTool::None && !io.WantCaptureMouse &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         SourceType closest_type = SourceType::None;
@@ -833,6 +859,7 @@ void AppState::frame() {
         10.0f,
         "%+.1f EV",
         ImGuiSliderFlags_AlwaysClamp);
+    ImGui::Checkbox("Camera shake", &camera_shake_enabled_);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::Checkbox("Bloom", &bloom_enabled_);
     ImGui::SliderFloat(

@@ -136,7 +136,21 @@ void Volcanoes::GpuSimulation::reset_terrain(const Terrain& terrain) {
     glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
     upload_terrain(terrain);
 
+    const float zero_float = 0;
+    for (size_t i = 0; i < 4; ++i) {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[i]);
+        glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero_float);
+    }
     const int32_t zero_int = 0;
+    const int32_t no_particle = -1;
+    for (size_t i = 4; i < buffers.size(); ++i) {
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffers[i]);
+        glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &no_particle);
+    }
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, sediment);
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero_float);
+    cursor = 0;
+
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_delta);
     glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32I, GL_RED_INTEGER, GL_INT, &zero_int);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, terrain_flow);
@@ -389,6 +403,7 @@ Volcanoes::~Volcanoes() {
 void Volcanoes::reset_for_new_terrain(const Terrain& terrain) {
     vents_.clear();
     springs_.clear();
+    impact_strengths_.clear();
     lava_emission_ = 0;
     spring_emission_ = 0;
     erosion_readback_accumulator_ = 0;
@@ -498,6 +513,12 @@ std::vector<Volcanoes::WaterImpact> Volcanoes::take_water_impacts() {
     std::vector<WaterImpact> impacts;
     impacts.swap(water_impacts_);
     return impacts;
+}
+
+std::vector<float> Volcanoes::take_impact_strengths() {
+    std::vector<float> strengths;
+    strengths.swap(impact_strengths_);
+    return strengths;
 }
 
 GLuint Volcanoes::terrain_texture() const {
@@ -627,6 +648,7 @@ void Volcanoes::add_lava(const Terrain& terrain, Vec3 center, float radius, floa
 }
 
 void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
+    impact_strengths_.push_back(size_scale);
     terrain.carve_crater(position, 65.0f * size_scale);
     terrain_changed(terrain);
     constexpr size_t ejecta_count = 1200;
@@ -655,6 +677,7 @@ void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
 }
 
 void Volcanoes::water_impact(Vec3 position, float size_scale) {
+    impact_strengths_.push_back(size_scale);
     water_impacts_.push_back({ position, size_scale });
     constexpr size_t vapor_count = 1200;
     std::vector<GpuParticle> records;

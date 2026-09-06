@@ -76,6 +76,7 @@ private:
     GpuSimulation gpu_;
     std::vector<Meteor> meteors_;
     std::vector<WaterImpact> water_impacts_;
+    std::vector<float> impact_strengths_;
     std::vector<Tornado> tornadoes_;
     uint32_t next_tornado_id_ = 1;
     struct Sprite {
@@ -130,6 +131,7 @@ public:
     const std::vector<Vec3>& spring_sources() const;
     const std::vector<Meteor>& meteors() const;
     std::vector<WaterImpact> take_water_impacts();
+    std::vector<float> take_impact_strengths();
     GLuint terrain_texture() const;
     GLuint scorched_texture() const;
     GLuint particle_buffer() const;
