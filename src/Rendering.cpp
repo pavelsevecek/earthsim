@@ -147,6 +147,8 @@ void WaterRenderer::update(
         for (const auto& impact : impacts) {
             uniform(impact_, "impactPosition", impact.position);
             uniform(impact_, "impactScale", impact.size_scale);
+            glUniform1i(
+                glGetUniformLocation(impact_, "explosionImpact"), impact.explosion ? 1 : 0);
             glDispatchCompute(groups, groups, 1);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }

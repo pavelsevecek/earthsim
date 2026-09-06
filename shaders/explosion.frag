@@ -32,6 +32,17 @@ float smokeAt(vec3 p) {
     if(any(lessThan(q,vec3(0.0)))||any(greaterThan(q,vec3(1.0)))) return 0.0;
     return texture(smokeTexture,q).r;
 }
+vec3 blackbodyRadiance(float heat) {
+    vec3 deepRed=vec3(10.0,0.055,0.002);
+    vec3 orange=vec3(22.0,2.0,0.05);
+    vec3 yellow=vec3(34.0,14.0,1.5);
+    vec3 warmWhite=vec3(42.0,35.0,20.0);
+    if(heat<0.28)
+        return mix(deepRed,orange,smoothstep(0.0,0.28,heat));
+    if(heat<0.64)
+        return mix(orange,yellow,smoothstep(0.28,0.64,heat));
+    return mix(yellow,warmWhite,smoothstep(0.64,1.0,heat));
+}
 void main() {
     fragColor=vec4(0.0);
     vec2 screen=uv*2.0-1.0;
@@ -69,9 +80,9 @@ void main() {
             lightDepth+=smokeAt(p+lightDirection*(float(j)+0.5)*18.0)*18.0;
         float illumination=mix(0.055,0.24,daylight)+exp(-lightDepth*0.055)*0.76*daylight;
         vec3 coolColor= mix(vec3(0.055,0.045,0.038),vec3(0.32,0.29,0.27),illumination);
-        vec3 hotColor= mix(vec3(22.0,1.4,0.04),vec3(38.0,21.0,4.5),visibleHeat) * 10;
+        vec3 hotColor=blackbodyRadiance(visibleHeat)*10.0;
         vec3 cloudRadiance=mix(
-            coolColor*sunColor,hotColor,smoothstep(0.06,0.32,visibleHeat))*3.6;
+            coolColor*sunColor,hotColor,smoothstep(0.015,0.22,visibleHeat))*3.6;
         vec3 radiance=mix(
             cloudRadiance,vec3(5.5,3.6,1.7)*(0.55+0.45*daylight),shock);
         radiance*=4.f * hazeTransmittance(t);

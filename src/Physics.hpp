@@ -15,6 +15,7 @@ public:
     struct WaterImpact {
         Vec3 position;
         float size_scale = 1;
+        bool explosion = false;
     };
 
 private:
@@ -148,6 +149,7 @@ public:
     void add_lava(const Terrain& terrain, Vec3 center, float radius, float spacing);
     void impact(Terrain& terrain, Vec3 position, float size_scale);
     void water_impact(Vec3 position, float size_scale);
+    void explosion_water_impact(Vec3 position, float size_scale);
     void lightning_water_impact(Vec3 position, size_t particle_count);
     void update(
         Terrain& terrain, double elapsed, float water_level, float wind_speed, Vec3 wind_direction);

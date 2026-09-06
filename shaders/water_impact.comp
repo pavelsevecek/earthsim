@@ -3,6 +3,7 @@ layout(local_size_x=16,local_size_y=16) in;
 layout(rg32f,binding=0) uniform image2D waterState;
 uniform vec3 impactPosition;
 uniform float impactScale;
+uniform bool explosionImpact;
 
 void main() {
     ivec2 size=imageSize(waterState);
@@ -11,7 +12,7 @@ void main() {
 
     vec2 uv=vec2(cell)/vec2(size-1);
     vec2 worldPosition=uv*2000.0-1000.0;
-    float radius=max(18.0,42.0*impactScale);
+    float radius=explosionImpact?max(28.0,110.0*impactScale):max(18.0,42.0*impactScale);
     float q=length(worldPosition-impactPosition.xz)/radius;
     if(q>3.0) return;
 
@@ -19,7 +20,9 @@ void main() {
     // which rebounds and radiates instead of permanently lowering the water level.
     float profile=(1.0-q*q)*exp(-q*q);
     vec2 state=imageLoad(waterState,cell).rg;
-    state.x-=64.0*impactScale*profile;
-    state.y-=128.0*impactScale*profile;
+    float displacement=explosionImpact?52.0:64.0;
+    float downwardVelocity=explosionImpact?260.0:128.0;
+    state.x-=displacement*impactScale*profile;
+    state.y-=downwardVelocity*impactScale*profile;
     imageStore(waterState,cell,vec4(state,0.0,0.0));
 }

@@ -499,6 +499,8 @@ void AppState::frame() {
                         volcanoes_.launch_meteor(position, meteor_size_);
                     else if (placement_ == PlacementTool::Explosion) {
                         volcanoes_.impact(terrain_, position, explosion_size_);
+                        volcanoes_.explosion_water_impact(
+                            { position.x, water_level_, position.z }, explosion_size_);
                         explosions_.explode(position, explosion_size_);
                     }
                     placement_ = PlacementTool::None;
@@ -762,7 +764,7 @@ void AppState::frame() {
     ImGui::SliderFloat("Explosion size",
         &explosion_size_,
         0.25f,
-        15.0f,
+        5.0f,
         "%.2fx",
         ImGuiSliderFlags_AlwaysClamp);
     ImGui::Checkbox("Explosion simulation", &explosion_simulation_enabled_);

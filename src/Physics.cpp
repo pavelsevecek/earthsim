@@ -615,6 +615,10 @@ void Volcanoes::water_impact(Vec3 position, float size_scale) {
     gpu_.spawn(records);
 }
 
+void Volcanoes::explosion_water_impact(Vec3 position, float size_scale) {
+    water_impacts_.push_back({ position, size_scale, true });
+}
+
 void Volcanoes::lightning_water_impact(Vec3 position, size_t particle_count) {
     std::vector<GpuParticle> records;
     records.reserve(particle_count);
