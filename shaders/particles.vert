@@ -54,7 +54,7 @@ void main() {
         center=particle.positionAge.xyz;
         float life=(trail||tornado)?particle.velocityLife.w:particleLifetime;
         float normalizedAge=clamp(particle.positionAge.w/max(life,0.001),0.0,1.0);
-        float sizeScale=trail?(1.0+2.0*normalizedAge):(vapor?(1.0+min(particle.positionAge.w*0.08,2.0)):1.0);
+        float sizeScale=trail?(1.0+2.0*normalizedAge):(vapor?(1.0+15.0*normalizedAge):1.0);
         size=particle.data.x*sizeScale;
         float ageFade=1.0-smoothstep(0.8,1.0,normalizedAge);
         opacity=trail?pow(1.0-normalizedAge,2.0):ageFade;
@@ -68,7 +68,7 @@ void main() {
             waterFactor=1.0;
         } else if(vapor) {
             radiance=vec3(0.82,0.86,0.9);
-            opacity=0.3*ageFade;
+            opacity=0.3*(1.0-smoothstep(0.0,1.0,normalizedAge));
             emissiveFactor=0.0;
             vaporFactor=1.0;
         } else {

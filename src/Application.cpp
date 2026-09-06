@@ -157,8 +157,11 @@ class AppState {
     Vec3 aircraft_right_{ -1, 0, 0 };
     Vec3 aircraft_up_{ 0, 1, 0 };
     Vec3 flight_camera_offset_{ 0, 18, -52 };
-    Vec3 flight_camera_eye_{};
+    Vec3 flight_camera_center_{};
     Vec3 flight_camera_up_{ 0, 1, 0 };
+    float flight_camera_yaw_offset_ = 0.0f;
+    float flight_camera_pitch_offset_ = 0.0f;
+    float flight_camera_distance_ = 55.0273f;
     float aircraft_vapor_emission_ = 0.0f;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
@@ -301,8 +304,9 @@ void AppState::frame() {
                         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
     if (placement_ != PlacementTool::None && !io.WantCaptureMouse)
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    if (!flying_ && !io.WantCaptureMouse) {
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && placement_ == PlacementTool::None &&
+    if (!io.WantCaptureMouse) {
+        if (!flying_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            placement_ == PlacementTool::None &&
             !target_click)
             panning_ = true;
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -315,15 +319,28 @@ void AppState::frame() {
         panning_ = false;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right) || !focused)
         rotating_ = false;
-    if (!flying_ && rotating_) {
-        yaw_ = std::remainder(yaw_ - io.MouseDelta.x * 0.005f, 2 * pi);
-        pitch_ = std::remainder(pitch_ + io.MouseDelta.y * 0.005f, 2 * pi);
+    if (rotating_) {
+        if (flying_) {
+            flight_camera_yaw_offset_ =
+                std::remainder(flight_camera_yaw_offset_ - io.MouseDelta.x * 0.005f, 2 * pi);
+            flight_camera_pitch_offset_ =
+                std::remainder(flight_camera_pitch_offset_ - io.MouseDelta.y * 0.005f, 2 * pi);
+        } else {
+            yaw_ = std::remainder(yaw_ - io.MouseDelta.x * 0.005f, 2 * pi);
+            pitch_ = std::remainder(pitch_ + io.MouseDelta.y * 0.005f, 2 * pi);
+        }
     }
-    if (!flying_ && !io.WantCaptureMouse) {
-        float zoomed = distance_ * std::exp(-io.MouseWheel * 0.12f);
-        // Reject only floating-point overflow/underflow, with no distance limits.
-        if (std::isfinite(zoomed) && zoomed > 0)
-            distance_ = zoomed;
+    if (!io.WantCaptureMouse) {
+        if (flying_) {
+            float zoomed = flight_camera_distance_ * std::exp(-io.MouseWheel * 0.12f);
+            if (std::isfinite(zoomed))
+                flight_camera_distance_ = std::clamp(zoomed, 14.0f, 500.0f);
+        } else {
+            float zoomed = distance_ * std::exp(-io.MouseWheel * 0.12f);
+            // Reject only floating-point overflow/underflow, with no distance limits.
+            if (std::isfinite(zoomed) && zoomed > 0)
+                distance_ = zoomed;
+        }
     }
     Vec3 orbit{
         std::cos(pitch_) * std::sin(yaw_), std::sin(pitch_), std::cos(pitch_) * std::cos(yaw_)
@@ -425,24 +442,38 @@ void AppState::frame() {
         }
 
         Vec3 desired_offset = aircraft_forward_ * -52.0f + aircraft_up_ * 18.0f;
+        desired_offset = normalize(desired_offset) * flight_camera_distance_;
+        Vec3 desired_camera_forward = normalize(desired_offset * -1.0f);
+        Vec3 desired_camera_up =
+            normalize(cross(aircraft_right_, desired_camera_forward));
         float rotation_blend = 1.0f - std::exp(-1.6f * dt);
-        constexpr float camera_radius = 55.0273f;
         flight_camera_offset_ =
             normalize(flight_camera_offset_ * (1.0f - rotation_blend) +
                       desired_offset * rotation_blend) *
-            camera_radius;
+            flight_camera_distance_;
         flight_camera_up_ = normalize(flight_camera_up_ * (1.0f - rotation_blend) +
-                                      aircraft_up_ * rotation_blend);
-        Vec3 desired_eye = aircraft_position_ + flight_camera_offset_;
+                                      desired_camera_up * rotation_blend);
         float position_blend = 1.0f - std::exp(-4.0f * dt);
-        flight_camera_eye_ =
-            flight_camera_eye_ + (desired_eye - flight_camera_eye_) * position_blend;
-        eye = flight_camera_eye_;
-        Vec3 camera_target = aircraft_position_ + flight_camera_up_ * 3.5f;
+        flight_camera_center_ = flight_camera_center_ +
+                                (aircraft_position_ - flight_camera_center_) * position_blend;
+
+        // Apply the user orbit after chase smoothing so mouse movement is immediate.
+        Vec3 camera_offset =
+            flight_camera_center_ - aircraft_position_ + flight_camera_offset_;
+        camera_offset = rotate(
+            camera_offset, flight_camera_up_, flight_camera_yaw_offset_);
+        Vec3 camera_forward = normalize(camera_offset * -1.0f);
+        Vec3 orbit_right = normalize(cross(camera_forward, flight_camera_up_));
+        camera_offset = rotate(
+            camera_offset, orbit_right, flight_camera_pitch_offset_);
+        camera_forward = normalize(camera_offset * -1.0f);
+        Vec3 camera_up = normalize(cross(orbit_right, camera_forward));
+        eye = aircraft_position_ + camera_offset;
+        float framing_offset = 3.5f * flight_camera_distance_ / 55.0273f;
+        Vec3 camera_target = aircraft_position_ + camera_up * framing_offset;
         forward = normalize(camera_target - eye);
-        right = normalize(cross(forward, flight_camera_up_));
+        right = normalize(cross(forward, camera_up));
         up = normalize(cross(right, forward));
-        flight_camera_up_ = up;
     }
     if (!flying_ && camera_shake_enabled_ && camera_shake_strength_ > 0.001f) {
         // High-frequency, non-repeating local rotations feel like an impact without
@@ -988,7 +1019,8 @@ void AppState::frame() {
         }
     } else {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Flight mode    W: descend    S: climb    A/D: roll");
+        ImGui::TextUnformatted(
+            "Flight mode    W: descend    S: climb    A/D: roll    RMB: camera    Wheel: zoom");
     }
     const ImVec2 close_button_size(36.0f * ui_scale, 36.0f * ui_scale);
     const ImVec2 flight_button_size(62.0f * ui_scale, 36.0f * ui_scale);
@@ -1016,9 +1048,14 @@ void AppState::frame() {
             float surface = terrain_.surface(target_.x, target_.z, terrain_normal);
             aircraft_position_ =
                 { target_.x, std::max(surface + 160.0f, water_level_ + 120.0f), target_.z };
-            flight_camera_offset_ = aircraft_forward_ * -52.0f + aircraft_up_ * 18.0f;
-            flight_camera_eye_ = aircraft_position_ + flight_camera_offset_;
-            flight_camera_up_ = aircraft_up_;
+            flight_camera_offset_ =
+                normalize(aircraft_forward_ * -52.0f + aircraft_up_ * 18.0f) *
+                flight_camera_distance_;
+            flight_camera_center_ = aircraft_position_;
+            flight_camera_up_ = normalize(
+                cross(aircraft_right_, normalize(flight_camera_offset_ * -1.0f)));
+            flight_camera_yaw_offset_ = 0.0f;
+            flight_camera_pitch_offset_ = 0.0f;
             aircraft_vapor_emission_ = 0.0f;
             flying_ = true;
         }
