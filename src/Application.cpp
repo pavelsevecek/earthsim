@@ -113,7 +113,7 @@ class AppState {
     float day_phase_offset_ = 0.34f;
     bool day_night_paused_ = false;
     float meteor_size_ = 1.0f;
-    float explosion_size_ = 1.0f;
+    float explosion_size_ = 0.65f;
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;

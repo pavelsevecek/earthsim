@@ -63,16 +63,20 @@ void main() {
             *blastFade;
         if(smoke<0.002&&shock<0.002) continue;
         float temperature=texture(temperatureTexture,volumeUv).r;
+        float visibleHeat=clamp(temperature/2.25,0.0,1.0);
         float lightDepth=0.0;
         for(int j=0;j<3;++j)
             lightDepth+=smokeAt(p+lightDirection*(float(j)+0.5)*18.0)*18.0;
         float illumination=mix(0.055,0.24,daylight)+exp(-lightDepth*0.055)*0.76*daylight;
         vec3 coolColor= mix(vec3(0.055,0.045,0.038),vec3(0.32,0.29,0.27),illumination);
-        vec3 hotColor= mix(vec3(22.0,1.4,0.04),vec3(38.0,21.0,4.5),temperature);
-        vec3 radiance=mix(coolColor*sunColor,hotColor,smoothstep(0.12,0.65,temperature));
-        radiance=mix(radiance,vec3(5.5,3.6,1.7)*(0.55+0.45*daylight),shock);
+        vec3 hotColor= mix(vec3(22.0,1.4,0.04),vec3(38.0,21.0,4.5),visibleHeat) * 10;
+        vec3 cloudRadiance=mix(
+            coolColor*sunColor,hotColor,smoothstep(0.06,0.32,visibleHeat))*3.6;
+        vec3 radiance=mix(
+            cloudRadiance,vec3(5.5,3.6,1.7)*(0.55+0.45*daylight),shock);
         radiance*=4.f * hazeTransmittance(t);
-        float alpha=1.0-exp(-(smoke*0.065+shock*0.035)*stride);
+        float smokeExtinction=mix(0.005,0.01,smoothstep(0.025,0.24,visibleHeat));
+        float alpha=1.0-exp(-(smoke*smokeExtinction+shock*0.035)*stride);
         scattering+=transmittance*alpha*radiance;
         transmittance*=1.0-alpha;
         if(transmittance<0.01) break;

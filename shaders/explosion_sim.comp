@@ -38,6 +38,33 @@ vec3 curlAt(vec3 uv,vec3 texel) {
         (f.x-b.x)*inv.z-(r.z-l.z)*inv.x,
         (r.y-l.y)*inv.x-(u.x-d.x)*inv.y);
 }
+void mushroomShape(vec3 world,out float capHeight,out float capRadius,
+    out float capHalfHeight,out float guide) {
+    float formation=smoothstep(0.4,2.5,age);
+    float guideFade=1.0-smoothstep(11.0,18.0,age);
+    float progress=smoothstep(0.0,10.0,age);
+    capHeight=boxMin.y+mix(48.0*strength,0.48*(boxMax.y-boxMin.y),progress);
+    capRadius=mix(48.0,135.0,progress)*strength;
+    capHalfHeight=mix(28.0,48.0,progress)*strength;
+    vec2 horizontal=world.xz-vec2((boxMin.x+boxMax.x)*0.5,
+        (boxMin.z+boxMax.z)*0.5);
+    float radialDistance=length(horizontal);
+    float verticalDistance=world.y-capHeight;
+    // A flatter underside and taller crown read more clearly than a symmetric ellipsoid.
+    float verticalScale=verticalDistance<0.0?capHalfHeight*0.58:capHalfHeight;
+    float capDistance=length(vec2(radialDistance/capRadius,
+        verticalDistance/max(verticalScale,0.001)));
+    float cap=1.0-smoothstep(0.72,1.10,capDistance);
+    float ringDistance=length(vec2((radialDistance-capRadius*0.76)/(22.0*strength),
+        verticalDistance/(18.0*strength)));
+    float rim=1.0-smoothstep(0.62,1.28,ringDistance);
+    float stemRadius=mix(14.0,22.0,progress)*strength;
+    float stemRadial=exp(-pow(radialDistance/stemRadius,4.0));
+    float stemVertical=smoothstep(boxMin.y+7.0*strength,boxMin.y+30.0*strength,world.y)
+        *(1.0-smoothstep(capHeight-capHalfHeight*0.30,
+            capHeight+capHalfHeight*0.08,world.y));
+    guide=max(cap,max(0.92*rim,0.58*stemRadial*stemVertical))*formation*guideFade;
+}
 
 void main() {
     ivec3 p=ivec3(gl_GlobalInvocationID.xyz);
@@ -63,7 +90,7 @@ void main() {
         if(world.y<=ground) { core=0.0; shell=0.0; velocity=vec3(0.0); }
         imageStore(velocityImage,p,vec4(velocity,0.0));
         imageStore(smokeImage,p,vec4(shell*0.82));
-        imageStore(temperatureImage,p,vec4(core));
+        imageStore(temperatureImage,p,vec4(core*2.25));
         imageStore(scalarImage,p,vec4(0.0));
         return;
     }
@@ -83,9 +110,10 @@ void main() {
         // A stably stratified atmosphere arrests the thermal near its neutral
         // buoyancy altitude. Pressure projection then redirects the remaining
         // momentum sideways instead of letting the plume remain a chimney.
-        float buoyantMaterial=max(smoke,temperature);
+        float thermalBuoyancy=min(temperature,1.5);
+        float buoyantMaterial=max(smoke,thermalBuoyancy);
         float stratification=(46.0+0.28*overshoot)*buoyantMaterial*neutralApproach;
-        velocity.y+=(36.0*temperature-5.0*smoke-stratification)*dt;
+        velocity.y+=(36.0*thermalBuoyancy-5.0*smoke-stratification)*dt;
         velocity.y*=exp(-1.4*neutralApproach*dt);
         vec2 fromCenter=world.xz-center.xz;
         float radialDistance=length(fromCenter);
@@ -141,6 +169,23 @@ void main() {
         float capInterior=1.0-smoothstep(130.0*strength,175.0*strength,radialDistance);
         float smoke=texture(smokeTexture,uv).r;
         velocity.xz+=radialDirection*(18.0*strength*smoke*capBand*capInterior*dt);
+        float guidedCapHeight,guidedCapRadius,guidedCapHalfHeight,guide;
+        mushroomShape(world,guidedCapHeight,guidedCapRadius,guidedCapHalfHeight,guide);
+        float circulationFade=smoothstep(0.8,2.5,age)
+            *(1.0-smoothstep(11.0,17.0,age));
+        vec2 guideOffset=world.xz-center.xz;
+        float guideRadius=length(guideOffset);
+        vec2 guideDirection=guideRadius>0.01?guideOffset/guideRadius:vec2(0.0);
+        float ringRadius=guidedCapRadius*0.72;
+        float ringScale=34.0*strength;
+        float ringX=(guideRadius-ringRadius)/ringScale;
+        float ringY=(world.y-guidedCapHeight)/ringScale;
+        float ringEnvelope=exp(-0.72*(ringX*ringX+ringY*ringY));
+        float circulationSpeed=26.0*strength*circulationFade*ringEnvelope;
+        // Meridional circulation: rise inside, spread over the crown, descend
+        // around the rim, and return inward beneath it.
+        velocity.xz+=guideDirection*(ringY*circulationSpeed*dt);
+        velocity.y+=-ringX*circulationSpeed*dt;
         if(world.y<=ground) velocity=vec3(0.0);
         imageStore(velocityImage,p,vec4(clamp(velocity,vec3(-300.0),vec3(300.0)),0.0));
     } else if(pass==5) {
@@ -158,10 +203,18 @@ void main() {
         // Approximate adiabatic cooling by the parcel's upward displacement.
         // The projected solver is incompressible, so its divergence cannot
         // provide the compressible expansion term directly.
-        temperature-=0.0016*max(velocity.y,0.0)*dt;
-        temperature*=exp(-0.075*dt);
+        temperature-=0.00032*max(velocity.y,0.0)*dt;
+        temperature*=exp(-0.015*dt);
+        float guidedCapHeight,guidedCapRadius,guidedCapHalfHeight,guide;
+        mushroomShape(world,guidedCapHeight,guidedCapRadius,guidedCapHalfHeight,guide);
+        // The guide guarantees a readable silhouette while still allowing
+        // advection, turbulence, cooling, and wind to deform the volume.
+        float shapeControl=smoothstep(0.5,2.5,age)*(1.0-smoothstep(9.0,13.0,age));
+        float outsideGuide=1.0-smoothstep(0.02,0.24,guide);
+        smoke*=exp(-0.72*outsideGuide*shapeControl*dt);
+        smoke=max(smoke,0.74*guide);
         if(world.y<=ground) { smoke=0.0; temperature=0.0; }
         imageStore(smokeImage,p,vec4(clamp(smoke,0.0,1.5)));
-        imageStore(temperatureImage,p,vec4(clamp(temperature,0.0,1.0)));
+        imageStore(temperatureImage,p,vec4(clamp(temperature,0.0,2.5)));
     }
 }
