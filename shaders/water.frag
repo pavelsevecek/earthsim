@@ -40,16 +40,29 @@ float hazeAmount(float distanceToEye) {
 }
 void main() {
     vec3 normal=normalize(surfaceNormal);
-    vec3 directionToEye=normalize(eye-worldPosition);
+    vec3 toEye=eye-worldPosition;
+    float distanceToEye=length(toEye);
+    vec3 directionToEye=toEye/max(distanceToEye,0.0001);
     vec3 reflection=reflect(-directionToEye,normal);
     float skyHeight=smoothstep(-0.15,0.85,reflection.y);
     vec3 reflectedSky=mix(vec3(0.34,0.52,0.72),vec3(0.055,0.24,0.62),skyHeight)*daylight;
     vec4 reflectedClip=reflectionViewProjection*vec4(worldPosition,1.0);
-    vec2 reflectionUv=reflectedClip.xy/max(abs(reflectedClip.w),0.0001)*0.5+0.5;
-    vec2 ripple=normal.xz*0.035;
+    vec2 planarUv=reflectedClip.xy/max(abs(reflectedClip.w),0.0001)*0.5+0.5;
+    // Project a point along the locally reflected view ray into the existing
+    // planar capture. For flat water this remains aligned with planarUv; tilted
+    // wave normals bend the lookup in screen space with the correct perspective.
+    float reflectionDistance=clamp(distanceToEye*0.75,250.0,1200.0);
+    vec3 reflectedTarget=worldPosition+reflection*reflectionDistance;
+    vec4 localReflectionClip=reflectionViewProjection*vec4(reflectedTarget,1.0);
+    vec2 localReflectionUv=localReflectionClip.xy
+        /max(abs(localReflectionClip.w),0.0001)*0.5+0.5;
+    vec2 reflectionOffset=localReflectionUv-planarUv;
+    float offsetLength=length(reflectionOffset);
+    reflectionOffset*=min(1.0,0.08/max(offsetLength,0.0001));
+    vec2 reflectionUv=planarUv+reflectionOffset*step(0.0001,localReflectionClip.w);
     float edge=min(min(reflectionUv.x,reflectionUv.y),min(1.0-reflectionUv.x,1.0-reflectionUv.y));
     float inside=smoothstep(0.0,0.025,edge)*step(0.0001,reflectedClip.w);
-    vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv+ripple,vec2(0.001),vec2(0.999))).rgb;
+    vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv,vec2(0.001),vec2(0.999))).rgb;
     vec3 reflectedColor=mix(reflectedSky,planarReflection,inside);
     bool viewedFromAir=directionToEye.y>=0.0;
     float facing=abs(dot(normal,directionToEye));
@@ -77,7 +90,7 @@ void main() {
     alpha=1.0-(1.0-alpha)*(1.0-foam*0.86);
     // Compose atmospheric haze over both the water surface and whatever remains
     // visible through it, expressed again as a straight-alpha source layer.
-    float haze=hazeAmount(length(eye-worldPosition));
+    float haze=hazeAmount(distanceToEye);
     float hazedAlpha=haze+(1.0-haze)*alpha;
     color=(haze*fogColor+(1.0-haze)*alpha*color)/max(hazedAlpha,0.0001);
     alpha=hazedAlpha;
