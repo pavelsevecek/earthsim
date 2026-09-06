@@ -121,6 +121,8 @@ class AppState {
         TornadoDirection,
         TerrainUp,
         TerrainDown,
+        FlattenTerrain,
+        RoughenTerrain,
         AddWater,
         AddLava
     };
@@ -131,6 +133,7 @@ class AppState {
     Vec3 tornado_origin_{};
     bool placement_miss_ = false;
     float brush_radius_ = 85.0f;
+    float terrain_step_magnitude_ = 1.0f;
     float particle_spacing_ = 3.0f;
     double previous_;
     double simulation_time_ = 0.0;
@@ -431,19 +434,27 @@ void AppState::frame() {
                 if (target_click)
                     target_ = position;
                 else if (placement_ == PlacementTool::TerrainUp ||
-                         placement_ == PlacementTool::TerrainDown) {
-                    float elevation = placement_ == PlacementTool::TerrainUp ? 18.0f : -18.0f;
-                    terrain_.deform(position, brush_radius_, elevation);
+                         placement_ == PlacementTool::TerrainDown ||
+                         placement_ == PlacementTool::FlattenTerrain ||
+                         placement_ == PlacementTool::RoughenTerrain) {
+                    if (placement_ == PlacementTool::FlattenTerrain)
+                        terrain_.flatten(position, brush_radius_, terrain_step_magnitude_);
+                    else if (placement_ == PlacementTool::RoughenTerrain)
+                        terrain_.roughen(position, brush_radius_, terrain_step_magnitude_);
+                    else {
+                        float elevation =
+                            (placement_ == PlacementTool::TerrainUp ? 18.0f : -18.0f) *
+                            terrain_step_magnitude_;
+                        terrain_.deform(position, brush_radius_, elevation);
+                    }
                     volcanoes_.terrain_changed(terrain_);
                     placement_miss_ = false;
                 } else if (placement_ == PlacementTool::AddWater ||
                            placement_ == PlacementTool::AddLava) {
                     if (placement_ == PlacementTool::AddWater)
-                        volcanoes_.add_water(
-                            terrain_, position, brush_radius_, particle_spacing_);
+                        volcanoes_.add_water(terrain_, position, brush_radius_, particle_spacing_);
                     else
-                        volcanoes_.add_lava(
-                            terrain_, position, brush_radius_, particle_spacing_);
+                        volcanoes_.add_lava(terrain_, position, brush_radius_, particle_spacing_);
                     placement_miss_ = false;
                 } else if (placement_ == PlacementTool::TornadoOrigin) {
                     tornado_origin_ = position;
@@ -591,9 +602,12 @@ void AppState::frame() {
 
     ImGui::SetNextWindowPos(ImVec2(20 * ui_scale, 20 * ui_scale), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.78f);
+    //ImGuiViewport* viewport = ImGui::GetMainViewport();
+    //ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x / 2, viewport->WorkSize.y - 10), ImGuiCond_Always);
     ImGui::Begin("EarthSim",
         nullptr,
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | 
+            ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     float time_of_day_hours = day * 24.0f;
     ImGui::SetNextItemWidth(180 * ui_scale);
@@ -667,6 +681,18 @@ void AppState::frame() {
     }
     ImGui::SameLine();
 
+    if (ImGui::Button("Flatten terrain")) {
+        placement_ = PlacementTool::FlattenTerrain;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Roughen terrain")) {
+        placement_ = PlacementTool::RoughenTerrain;
+        placement_miss_ = false;
+        panning_ = false;
+    }
+
     if (ImGui::Button("Add water")) {
         placement_ = PlacementTool::AddWater;
         placement_miss_ = false;
@@ -689,19 +715,18 @@ void AppState::frame() {
     ImGui::SliderFloat(
         "Meteor size", &meteor_size_, 0.1f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
-    ImGui::SliderFloat("Brush radius",
-        &brush_radius_,
-        10.0f,
-        300.0f,
-        "%.0f",
+    ImGui::SliderFloat(
+        "Brush radius", &brush_radius_, 10.0f, 300.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat("Terrain step",
+        &terrain_step_magnitude_,
+        0.1f,
+        5.0f,
+        "%.2fx",
         ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetNextItemWidth(180 * ui_scale);
-    ImGui::SliderFloat("Particle spacing",
-        &particle_spacing_,
-        1.0f,
-        12.0f,
-        "%.1f",
-        ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat(
+        "Particle spacing", &particle_spacing_, 1.0f, 12.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
     if (placement_ != PlacementTool::None) {
         const char* placement_prompt =
             placement_ == PlacementTool::Volcano  ? "Click terrain to place a volcano."
@@ -713,8 +738,12 @@ void AppState::frame() {
                 ? "Click terrain to set the tornado direction."
             : placement_ == PlacementTool::TerrainUp   ? "Click terrain to raise it."
             : placement_ == PlacementTool::TerrainDown ? "Click terrain to lower it."
-            : placement_ == PlacementTool::AddWater    ? "Click terrain to add water."
-                                                       : "Click terrain to add lava.";
+            : placement_ == PlacementTool::FlattenTerrain
+                ? "Click terrain to level it toward the brush's average height."
+            : placement_ == PlacementTool::RoughenTerrain
+                ? "Click terrain to exaggerate differences from the brush's average height."
+            : placement_ == PlacementTool::AddWater ? "Click terrain to add water."
+                                                    : "Click terrain to add lava.";
         ImGui::TextUnformatted(placement_prompt);
         ImGui::TextDisabled("Esc cancels placement.");
         if (ImGui::Button("Cancel placement")) {

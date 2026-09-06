@@ -225,6 +225,43 @@ void Terrain::deform(Vec3 center, float radius, float elevation) {
     update_geometry();
 }
 
+void Terrain::adjust_roughness(Vec3 center, float radius, float magnitude, bool roughen) {
+    double height_sum = 0.0;
+    size_t sample_count = 0;
+    for (size_t i = 0; i < vertices_.size(); ++i) {
+        Vec3 p = vertices_[i].position;
+        float distance = std::hypot(p.x - center.x, p.z - center.z);
+        if (distance >= radius)
+            continue;
+        height_sum += heights_[i];
+        ++sample_count;
+    }
+    if (sample_count == 0)
+        return;
+
+    float average_height = float(height_sum / double(sample_count));
+    float center_blend = 1.0f - std::pow(0.5f, magnitude);
+    for (size_t i = 0; i < vertices_.size(); ++i) {
+        Vec3 p = vertices_[i].position;
+        float distance = std::hypot(p.x - center.x, p.z - center.z);
+        if (distance >= radius)
+            continue;
+        float weight = 1.0f - distance / radius;
+        weight = weight * weight * (3.0f - 2.0f * weight);
+        float displacement = (average_height - heights_[i]) * center_blend * weight;
+        heights_[i] += roughen ? -displacement : displacement;
+    }
+    update_geometry();
+}
+
+void Terrain::flatten(Vec3 center, float radius, float magnitude) {
+    adjust_roughness(center, radius, magnitude, false);
+}
+
+void Terrain::roughen(Vec3 center, float radius, float magnitude) {
+    adjust_roughness(center, radius, magnitude, true);
+}
+
 void Terrain::carve_crater(Vec3 center, float radius) {
     for (size_t i = 0; i < vertices_.size(); ++i) {
         Vec3 p = vertices_[i].position;

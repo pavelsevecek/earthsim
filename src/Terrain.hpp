@@ -24,6 +24,7 @@ class Terrain {
     GLuint vbo_ = 0;
     GLuint ebo_ = 0;
     GLsizei count_ = 0;
+    void adjust_roughness(Vec3 center, float radius, float magnitude, bool roughen);
 
 public:
     explicit Terrain(uint32_t seed);
@@ -31,6 +32,8 @@ public:
     void update_geometry();
     bool apply_height_deltas(const std::vector<int32_t>& deltas, float scale);
     void deform(Vec3 center, float radius, float elevation);
+    void flatten(Vec3 center, float radius, float magnitude);
+    void roughen(Vec3 center, float radius, float magnitude);
     void carve_crater(Vec3 center, float radius);
     bool segment_hit(Vec3 start, Vec3 end, Vec3& hit) const;
     void draw() const;
