@@ -1,0 +1,51 @@
+#version 430 core
+layout(local_size_x=8,local_size_y=8) in;
+layout(r16f,binding=0) uniform writeonly image2D shadowImage;
+uniform sampler3D cloudDensityTexture;
+uniform sampler2D terrainHeight;
+uniform vec3 sunDirection;
+uniform float cloudOpacity;
+uniform float cloudCoverage;
+uniform float cloudBase;
+uniform float cloudTop;
+uniform bool cloudsEnabled;
+
+const float cloudExtent=2200.0;
+const float terrainExtent=1000.0;
+
+float density(vec3 p) {
+    if(any(lessThan(p,vec3(-cloudExtent,cloudBase,-cloudExtent)))
+        ||any(greaterThan(p,vec3(cloudExtent,cloudTop,cloudExtent)))) return 0.0;
+    float layer=(p.y-cloudBase)/(cloudTop-cloudBase);
+    float profile=smoothstep(0.0,0.16,layer)*(1.0-smoothstep(0.68,1.0,layer));
+    float edge=1.0-smoothstep(1700.0,cloudExtent,max(abs(p.x),abs(p.z)));
+    vec3 uv=vec3(p.x/cloudExtent*0.5+0.5,layer,p.z/cloudExtent*0.5+0.5);
+    float shape=textureLod(cloudDensityTexture,uv,0.0).r;
+    float threshold=mix(0.68,0.18,cloudCoverage);
+    return smoothstep(threshold,threshold+0.29,shape)*profile*edge;
+}
+
+void main() {
+    ivec2 pixel=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(shadowImage);
+    if(any(greaterThanEqual(pixel,size))) return;
+    if(!cloudsEnabled||cloudOpacity<=0.0||cloudCoverage<=0.0001||sunDirection.y<=0.01) {
+        imageStore(shadowImage,pixel,vec4(1.0));
+        return;
+    }
+    vec2 uv=(vec2(pixel)+0.5)/vec2(size);
+    vec2 ground=mix(vec2(-terrainExtent),vec2(terrainExtent),uv);
+    float groundHeight=textureLod(terrainHeight,uv,0.0).r;
+    float entry=max(0.0,(cloudBase-groundHeight)/sunDirection.y);
+    float leave=(cloudTop-groundHeight)/sunDirection.y;
+    const int steps=16;
+    float stride=(leave-entry)/float(steps);
+    float opticalDepth=0.0;
+    for(int i=0;i<steps;++i) {
+        float t=entry+(float(i)+0.5)*stride;
+        opticalDepth+=density(vec3(ground.x,groundHeight,ground.y)+sunDirection*t)*stride;
+    }
+    // Retain a little ambient fill under even the densest cloud cover.
+    float visibility=exp(-opticalDepth*0.1*cloudOpacity);
+    imageStore(shadowImage,pixel,vec4(visibility));
+}

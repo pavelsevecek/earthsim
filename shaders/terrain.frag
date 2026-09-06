@@ -3,6 +3,7 @@ in vec3 worldPosition;
 in vec3 worldNormal;
 in vec4 shadowPosition[2];
 uniform sampler2DArrayShadow terrainShadowMap;
+uniform sampler2D cloudShadowMap;
 uniform vec3 eye;
 uniform vec3 sunDirection;
 uniform float daylight;
@@ -70,12 +71,13 @@ void main() {
     vec3 sunlight = mix(vec3(1.0, 0.38, 0.14), vec3(1.0, 0.96, 0.84), smoothstep(0.0, 0.4, sunDirection.y));
     vec3 ambient = mix(vec3(0.045, 0.065, 0.12), vec3(0.28, 0.34, 0.40), daylight);
     float moonlight = max(dot(n, -sunDirection), 0.0) * (1.0 - daylight);
-    direct *= terrainVisibility(0, geometricNormal, sunDirection);
+    float cloudVisibility=texture(cloudShadowMap,worldPosition.xz/2000.0+0.5).r;
+    direct *= terrainVisibility(0, geometricNormal, sunDirection)*cloudVisibility;
     moonlight *= terrainVisibility(1, geometricNormal, -sunDirection);
     vec3 color = albedo * (ambient + sunlight * direct * 1.15 + vec3(0.07, 0.10, 0.18) * moonlight);
     vec3 viewDirection=normalize(eye-worldPosition);
     float wetHighlight=pow(max(dot(reflect(-sunDirection,n),viewDirection),0.0),72.0)
-        *wetAmount*daylight*terrainVisibility(0,geometricNormal,sunDirection);
+        *wetAmount*daylight*terrainVisibility(0,geometricNormal,sunDirection)*cloudVisibility;
     color+=sunlight*wetHighlight*0.7;
     float fog = 1.0 - exp(-hazeOpticalDepth(length(eye-worldPosition)));
     color = mix(color, fogColor, fog);

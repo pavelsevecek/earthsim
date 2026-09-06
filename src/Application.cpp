@@ -140,6 +140,7 @@ class AppState {
     float camera_exposure_ = 0.0f;
     float bloom_intensity_ = 0.15f;
     bool clouds_enabled_ = true;
+    bool cloud_shadows_enabled_ = true;
     bool cloud_simulation_enabled_ = true;
     bool explosion_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
@@ -407,6 +408,12 @@ void AppState::frame() {
             volcanoes_.particle_next_buffer());
 
     shadows_.render(terrain_, sun);
+    clouds_.update_shadow(sun,
+        cloud_opacity_,
+        cloud_coverage_,
+        cloud_base_,
+        cloud_top,
+        clouds_enabled_ && cloud_shadows_enabled_);
     reflection_.begin(w, h);
     Vec3 reflected_eye{ eye.x, 2.0f * water_level_ - eye.y, eye.z };
     Vec3 reflected_forward{ forward.x, -forward.y, forward.z };
@@ -436,6 +443,7 @@ void AppState::frame() {
         shadows_,
         rain_,
         volcanoes_.scorched_texture(),
+        clouds_.shadow_texture(),
         reflection_vp,
         reflected_eye,
         sun,
@@ -527,6 +535,7 @@ void AppState::frame() {
         shadows_,
         rain_,
         volcanoes_.scorched_texture(),
+        clouds_.shadow_texture(),
         vp,
         eye,
         sun,
@@ -618,6 +627,7 @@ void AppState::frame() {
         reflection_vp,
         reflection_.color_texture(),
         volcanoes_.terrain_texture(),
+        clouds_.shadow_texture(),
         eye,
         sun,
         fog,
@@ -971,6 +981,7 @@ void AppState::frame() {
     if (ImGui::DragFloat("Rain intensity", &rain_intensity, 1.f, 0.0f, 10.0f, "%.2f"))
         rain_.set_intensity(rain_intensity);
     ImGui::Checkbox("Clouds", &clouds_enabled_);
+    ImGui::Checkbox("Cloud shadows", &cloud_shadows_enabled_);
     ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);
     if (ImGui::Button("Clear clouds"))
         clouds_.clear_density();

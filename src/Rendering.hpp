@@ -33,6 +33,7 @@ public:
         const TerrainShadows& shadows,
         const Rain& rain,
         GLuint scorched_texture,
+        GLuint cloud_shadow_texture,
         const Mat4& vp,
         Vec3 eye,
         Vec3 sun,
@@ -71,6 +72,7 @@ public:
         const Mat4& reflection_vp,
         GLuint reflection_texture,
         GLuint terrain_height_texture,
+        GLuint cloud_shadow_texture,
         Vec3 eye,
         Vec3 sun,
         Vec3 fog,
@@ -101,6 +103,7 @@ class Clouds {
     static constexpr int simulation_x_ = 256;
     static constexpr int simulation_y_ = 32;
     static constexpr int simulation_z_ = 256;
+    static constexpr int shadow_resolution_ = 128;
     GLuint scene_fbo_ = 0;
     GLuint cloud_fbo_ = 0;
     GLuint scene_color_ = 0;
@@ -113,6 +116,8 @@ class Clouds {
     GLuint vao_ = 0;
     GLuint simulation_ = 0;
     GLuint vapor_deposition_ = 0;
+    GLuint shadow_compute_ = 0;
+    GLuint shadow_texture_ = 0;
     GLuint divergence_volume_ = 0;
     GLuint vapor_moisture_ = 0;
     GLuint terrain_height_texture_ = 0;
@@ -131,6 +136,7 @@ public:
     explicit Clouds(const std::filesystem::path& directory, GLuint terrain_texture);
     ~Clouds();
     GLuint density_texture() const;
+    GLuint shadow_texture() const;
     GLuint scene_framebuffer() const;
     GLuint scene_color_texture() const;
     GLuint scene_depth_texture() const;
@@ -146,6 +152,12 @@ public:
         Vec3 wind_direction,
         float cloud_base,
         float cloud_top);
+    void update_shadow(Vec3 sun,
+        float cloud_opacity,
+        float coverage,
+        float cloud_base,
+        float cloud_top,
+        bool enabled);
     void begin_scene(int w, int h);
     void begin_emission();
     void end_emission();

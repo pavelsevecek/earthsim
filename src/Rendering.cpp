@@ -47,6 +47,7 @@ void TerrainRenderer::draw(const Terrain& terrain,
     const TerrainShadows& shadows,
     const Rain& rain,
     GLuint scorched_texture,
+    GLuint cloud_shadow_texture,
     const Mat4& vp,
     Vec3 eye,
     Vec3 sun,
@@ -71,6 +72,9 @@ void TerrainRenderer::draw(const Terrain& terrain,
     glActiveTexture(GL_TEXTURE4);
     glBindTexture(GL_TEXTURE_2D, scorched_texture);
     glUniform1i(glGetUniformLocation(shader_, "terrainScorched"), 4);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, cloud_shadow_texture);
+    glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 5);
     glActiveTexture(GL_TEXTURE0);
     shadows.bind(shader_);
     terrain.draw();
@@ -190,6 +194,7 @@ void WaterRenderer::draw(const Mat4& vp,
     const Mat4& reflection_vp,
     GLuint reflection_texture,
     GLuint terrain_height_texture,
+    GLuint cloud_shadow_texture,
     Vec3 eye,
     Vec3 sun,
     Vec3 fog,
@@ -217,6 +222,9 @@ void WaterRenderer::draw(const Mat4& vp,
     glActiveTexture(GL_TEXTURE8);
     glBindTexture(GL_TEXTURE_2D, states_[state_index_]);
     glUniform1i(glGetUniformLocation(shader_, "waterState"), 8);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, cloud_shadow_texture);
+    glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 5);
     glUniformMatrix4fv(glGetUniformLocation(shader_, "reflectionViewProjection"),
         1,
         GL_FALSE,
@@ -231,6 +239,7 @@ void WaterRenderer::draw(const Mat4& vp,
     glDrawElements(GL_TRIANGLES, index_count_, GL_UNSIGNED_INT, nullptr);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE0);
 }
 
 TerrainShadows::TerrainShadows(const std::filesystem::path& directory) {
@@ -358,8 +367,13 @@ Clouds::Clouds(const std::filesystem::path& directory, GLuint terrain_texture)
         composite_ = program(directory, "cloud_composite");
         simulation_ = compute_program(directory, "cloud_sim");
         vapor_deposition_ = compute_program(directory, "cloud_vapor");
+        shadow_compute_ = compute_program(directory, "cloud_shadow");
     } catch (...) {
         glDeleteProgram(shader_);
+        glDeleteProgram(composite_);
+        glDeleteProgram(simulation_);
+        glDeleteProgram(vapor_deposition_);
+        glDeleteProgram(shadow_compute_);
         throw;
     }
     glGenVertexArrays(1, &vao_);
@@ -370,6 +384,23 @@ Clouds::Clouds(const std::filesystem::path& directory, GLuint terrain_texture)
     glGenTextures(1, &scene_emission_);
     glGenTextures(1, &cloud_color_);
     glGenTextures(1, &noise_texture_);
+    glGenTextures(1, &shadow_texture_);
+    glBindTexture(GL_TEXTURE_2D, shadow_texture_);
+    glTexImage2D(GL_TEXTURE_2D,
+        0,
+        GL_R16F,
+        shadow_resolution_,
+        shadow_resolution_,
+        0,
+        GL_RED,
+        GL_FLOAT,
+        nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    const float lit_border[] = { 1, 1, 1, 1 };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, lit_border);
     glBindTexture(GL_TEXTURE_3D, noise_texture_);
     constexpr int size = 64;
     std::vector<unsigned char> values(size * size * size);
@@ -425,9 +456,9 @@ Clouds::~Clouds() {
     glDeleteFramebuffers(1, &scene_fbo_);
     glDeleteFramebuffers(1, &cloud_fbo_);
     GLuint textures[] = {
-        scene_color_, scene_depth_, scene_emission_, cloud_color_, noise_texture_
+        scene_color_, scene_depth_, scene_emission_, cloud_color_, noise_texture_, shadow_texture_
     };
-    glDeleteTextures(5, textures);
+    glDeleteTextures(6, textures);
     glDeleteTextures(GLsizei(density_volumes_.size()), density_volumes_.data());
     glDeleteTextures(2, velocity_volumes_.data());
     glDeleteTextures(2, pressure_volumes_.data());
@@ -437,11 +468,43 @@ Clouds::~Clouds() {
     glDeleteProgram(composite_);
     glDeleteProgram(simulation_);
     glDeleteProgram(vapor_deposition_);
+    glDeleteProgram(shadow_compute_);
     glDeleteVertexArrays(1, &vao_);
 }
 
 GLuint Clouds::density_texture() const {
     return density_volumes_[size_t(density_index_)];
+}
+
+GLuint Clouds::shadow_texture() const {
+    return shadow_texture_;
+}
+
+void Clouds::update_shadow(Vec3 sun,
+    float cloud_opacity,
+    float coverage,
+    float cloud_base,
+    float cloud_top,
+    bool enabled) {
+    glUseProgram(shadow_compute_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_3D, density_texture());
+    glUniform1i(glGetUniformLocation(shadow_compute_, "cloudDensityTexture"), 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, terrain_height_texture_);
+    glUniform1i(glGetUniformLocation(shadow_compute_, "terrainHeight"), 1);
+    glBindImageTexture(0, shadow_texture_, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16F);
+    uniform(shadow_compute_, "sunDirection", sun);
+    uniform(shadow_compute_, "cloudOpacity", cloud_opacity);
+    uniform(shadow_compute_, "cloudCoverage", coverage);
+    uniform(shadow_compute_, "cloudBase", cloud_base);
+    uniform(shadow_compute_, "cloudTop", cloud_top);
+    glUniform1i(glGetUniformLocation(shadow_compute_, "cloudsEnabled"), enabled ? 1 : 0);
+    constexpr GLuint group_size = 8;
+    constexpr GLuint groups = (shadow_resolution_ + group_size - 1) / group_size;
+    glDispatchCompute(groups, groups, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    glActiveTexture(GL_TEXTURE0);
 }
 
 GLuint Clouds::scene_framebuffer() const {

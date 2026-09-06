@@ -10,6 +10,7 @@ uniform float atmosphereOpacity;
 uniform float time;
 uniform sampler2D reflectionTexture;
 uniform sampler2D terrainHeight;
+uniform sampler2D cloudShadowMap;
 uniform mat4 reflectionViewProjection;
 uniform float waterLevel;
 out vec4 fragColor;
@@ -68,12 +69,14 @@ void main() {
     bool viewedFromAir=directionToEye.y>=0.0;
     float facing=abs(dot(normal,directionToEye));
     float fresnel=dielectricFresnel(facing,viewedFromAir?1.0:1.333,viewedFromAir?1.333:1.0);
-    float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*daylight;
+    float cloudVisibility=texture(cloudShadowMap,worldPosition.xz/2000.0+0.5).r;
+    float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*daylight*cloudVisibility;
     vec3 reflectedRadiance=reflectedColor+vec3(1.0,0.88,0.62)*sunGlint*2.5;
     // Approximate a deep water column. Fresnel accounts for interface reflection;
     // Beer-Lambert extinction accounts for light that enters but does not return.
     float transmission=exp(-1.10/max(facing,0.08));
     vec3 waterScattering=mix(vec3(0.001,0.006,0.012),vec3(0.025,0.24,0.46),daylight);
+    waterScattering*=mix(0.55,1.0,cloudVisibility);
     float alpha=1.0-(1.0-fresnel)*transmission;
     vec3 color=(fresnel*reflectedRadiance
         +(1.0-fresnel)*(1.0-transmission)*waterScattering)/max(alpha,0.0001);
