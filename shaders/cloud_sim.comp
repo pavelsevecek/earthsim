@@ -5,6 +5,7 @@ layout(rgba16f,binding=1) uniform image3D velocityImage;
 layout(r16f,binding=2) uniform image3D scalarImage;
 layout(std430,binding=0) readonly buffer CloudMoisture { uint moisture[]; };
 uniform sampler3D densityTexture;
+uniform sampler3D predictedDensityTexture;
 uniform sampler3D velocityTexture;
 uniform sampler3D pressureTexture;
 uniform sampler3D divergenceTexture;
@@ -15,6 +16,7 @@ uniform float dt;
 uniform float time;
 uniform float windSpeed;
 uniform vec2 windDirection;
+uniform vec2 equilibriumOffset;
 uniform float cloudBase;
 uniform float cloudTop;
 uniform int meteorCount;
@@ -139,6 +141,27 @@ void main() {
         vec3 velocity=texture(velocityTexture,uv).xyz;
         vec3 previousUv=wrapUv(uv-velocity*dt/(boxMax()-boxMin()));
         float density=texture(densityTexture,previousUv).r;
+        imageStore(densityImage,p,vec4(density));
+    } else if(pass==8) {
+        vec3 velocity=texture(velocityTexture,uv).xyz;
+        vec3 previousUv=wrapUv(uv-velocity*dt/(boxMax()-boxMin()));
+        vec3 reverseUv=wrapUv(uv+velocity*dt/(boxMax()-boxMin()));
+        float predicted=texture(predictedDensityTexture,uv).r;
+        float reversed=texture(predictedDensityTexture,reverseUv).r;
+        float original=texture(densityTexture,uv).r;
+        // MacCormack correction restores contrast lost to repeated trilinear
+        // interpolation. Clamp it to the source stencil to prevent ringing.
+        ivec3 sourceBase=ivec3(floor(previousUv*vec3(volumeSize)-0.5));
+        float minimumDensity=1.0,maximumDensity=0.0;
+        for(int z=0;z<=1;++z) for(int y=0;y<=1;++y) for(int x=0;x<=1;++x) {
+            vec3 sourceUv=wrapUv(
+                (vec3(sourceBase+ivec3(x,y,z))+0.5)/vec3(volumeSize));
+            float sourceDensity=textureLod(densityTexture,sourceUv,0.0).r;
+            minimumDensity=min(minimumDensity,sourceDensity);
+            maximumDensity=max(maximumDensity,sourceDensity);
+        }
+        float density=clamp(
+            predicted+0.5*(original-reversed),minimumDensity,maximumDensity);
         uint linearIndex=uint((p.z*volumeSize.y+p.y)*volumeSize.x+p.x);
         density+=float(moisture[linearIndex])*(1.0/65535.0);
         // Explicitly move material out of the fast projectile's under-resolved
@@ -155,8 +178,17 @@ void main() {
             float rim=exp(-55.0*(normalizedRadius-0.72)*(normalizedRadius-0.72))*longitudinal;
             density=density*(1.0-0.23*core)+0.05*rim;
         }
-        float equilibrium=initialDensity(world);
-        density=mix(density,equilibrium,1.0-exp(-dt/900.0));
+        vec2 horizontalSize=boxMax().xz-boxMin().xz;
+        vec2 sourceHorizontal=boxMin().xz
+            +mod(world.xz-equilibriumOffset-boxMin().xz,horizontalSize);
+        float equilibrium=initialDensity(vec3(sourceHorizontal.x,world.y,sourceHorizontal.y));
+        // Numerical diffusion primarily creates density deficits. Refill those
+        // quickly, while allowing vapor additions and impact-compressed regions
+        // to remain part of the simulation for substantially longer.
+        float deficit=max(equilibrium-density,0.0);
+        float excess=max(density-equilibrium,0.0);
+        density+=deficit*(1.0-exp(-dt/12.0));
+        density-=excess*(1.0-exp(-dt/90.0));
         if(world.y<=terrainSurface(world)) density=0.0;
         imageStore(densityImage,p,vec4(clamp(density,0.0,1.0)));
     }

@@ -28,7 +28,7 @@ float density(vec3 p) {
     if(cloudCoverage <= 0.0001) return 0.0;
     if(any(lessThan(p, boxMin())) || any(greaterThan(p, boxMax()))) return 0.0;
     float layer = (p.y - cloudBase) / (cloudTop - cloudBase);
-    float profile = smoothstep(0.0, 0.16, layer) * (1.0 - smoothstep(0.48, 1.0, layer));
+    float profile = smoothstep(0.0, 0.16, layer) * (1.0 - smoothstep(0.68, 1.0, layer));
     float edge = 1.0 - smoothstep(1700.0, 2200.0, max(abs(p.x), abs(p.z)));
     vec3 volumeUv=(p-boxMin())/(boxMax()-boxMin());
     float simulatedShape=texture(cloudDensityTexture,volumeUv).r;

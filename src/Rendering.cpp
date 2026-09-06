@@ -383,7 +383,7 @@ Clouds::Clouds(const std::filesystem::path& directory, GLuint terrain_texture)
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_REPEAT);
-    glGenTextures(2, density_volumes_.data());
+    glGenTextures(GLsizei(density_volumes_.size()), density_volumes_.data());
     glGenTextures(2, velocity_volumes_.data());
     glGenTextures(2, pressure_volumes_.data());
     glGenTextures(1, &divergence_volume_);
@@ -428,7 +428,7 @@ Clouds::~Clouds() {
         scene_color_, scene_depth_, scene_emission_, cloud_color_, noise_texture_
     };
     glDeleteTextures(5, textures);
-    glDeleteTextures(2, density_volumes_.data());
+    glDeleteTextures(GLsizei(density_volumes_.size()), density_volumes_.data());
     glDeleteTextures(2, velocity_volumes_.data());
     glDeleteTextures(2, pressure_volumes_.data());
     glDeleteTextures(1, &divergence_volume_);
@@ -469,8 +469,9 @@ void Clouds::clear_density() {
     glUniform1i(glGetUniformLocation(simulation_, "pass"), 7);
     for (size_t i = 0; i < density_volumes_.size(); ++i) {
         glBindImageTexture(0, density_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
-        glBindImageTexture(1, velocity_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-        glBindImageTexture(2, pressure_volumes_[i], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
+        glBindImageTexture(
+            1, velocity_volumes_[0], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+        glBindImageTexture(2, pressure_volumes_[0], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R16F);
         glDispatchCompute(
             (simulation_x_ + 3) / 4, (simulation_y_ + 3) / 4, (simulation_z_ + 3) / 4);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
@@ -504,10 +505,12 @@ void Clouds::reset(
     };
     initialize(density_volumes_[0], velocity_volumes_[0], pressure_volumes_[0], 0);
     initialize(density_volumes_[1], velocity_volumes_[1], pressure_volumes_[1], 0);
+    initialize(density_volumes_[2], velocity_volumes_[0], pressure_volumes_[0], 0);
     initialize(density_volumes_[0], velocity_volumes_[0], divergence_volume_, 6);
     density_index_ = 0;
     velocity_index_ = 0;
     pressure_index_ = 0;
+    equilibrium_offset_ = {};
     simulation_accumulator_ = 0;
     glActiveTexture(GL_TEXTURE0);
 }
@@ -525,6 +528,9 @@ void Clouds::update(double elapsed,
     simulation_accumulator_ += elapsed;
     while (simulation_accumulator_ >= step) {
         simulation_accumulator_ -= step;
+        equilibrium_offset_ = equilibrium_offset_ + wind_direction * (wind_speed * step);
+        equilibrium_offset_.x = std::fmod(equilibrium_offset_.x, 4400.0f);
+        equilibrium_offset_.z = std::fmod(equilibrium_offset_.z, 4400.0f);
         constexpr uint32_t voxel_count = uint32_t(simulation_x_ * simulation_y_ * simulation_z_);
         glUseProgram(vapor_deposition_);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, particle_buffer);
@@ -561,6 +567,9 @@ void Clouds::update(double elapsed,
         glUniform2f(glGetUniformLocation(simulation_, "windDirection"),
             wind_direction.x,
             wind_direction.z);
+        glUniform2f(glGetUniformLocation(simulation_, "equilibriumOffset"),
+            equilibrium_offset_.x,
+            equilibrium_offset_.z);
         uniform(simulation_, "cloudBase", cloud_base);
         uniform(simulation_, "cloudTop", cloud_top);
         std::array<float, 32> positions{};
@@ -610,15 +619,16 @@ void Clouds::update(double elapsed,
         };
         source(0, "densityTexture", density_volumes_[size_t(density_index_)]);
         source(1, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
+        int scratch_density = (density_index_ + 1) % int(density_volumes_.size());
         int next_velocity = 1 - velocity_index_;
         run(1,
-            density_volumes_[size_t(1 - density_index_)],
+            density_volumes_[size_t(scratch_density)],
             velocity_volumes_[size_t(next_velocity)],
             divergence_volume_);
         velocity_index_ = next_velocity;
         source(1, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
         run(2,
-            density_volumes_[size_t(1 - density_index_)],
+            density_volumes_[size_t(scratch_density)],
             velocity_volumes_[size_t(1 - velocity_index_)],
             divergence_volume_);
         source(3, "divergenceTexture", divergence_volume_);
@@ -626,7 +636,7 @@ void Clouds::update(double elapsed,
             source(2, "pressureTexture", pressure_volumes_[size_t(pressure_index_)]);
             int next_pressure = 1 - pressure_index_;
             run(3,
-                density_volumes_[size_t(1 - density_index_)],
+                density_volumes_[size_t(scratch_density)],
                 velocity_volumes_[size_t(1 - velocity_index_)],
                 pressure_volumes_[size_t(next_pressure)]);
             pressure_index_ = next_pressure;
@@ -634,18 +644,24 @@ void Clouds::update(double elapsed,
         source(2, "pressureTexture", pressure_volumes_[size_t(pressure_index_)]);
         int projected_velocity = 1 - velocity_index_;
         run(4,
-            density_volumes_[size_t(1 - density_index_)],
+            density_volumes_[size_t(scratch_density)],
             velocity_volumes_[size_t(projected_velocity)],
             divergence_volume_);
         velocity_index_ = projected_velocity;
         source(0, "densityTexture", density_volumes_[size_t(density_index_)]);
         source(1, "velocityTexture", velocity_volumes_[size_t(velocity_index_)]);
-        int next_density = 1 - density_index_;
+        int predicted_density = scratch_density;
         run(5,
-            density_volumes_[size_t(next_density)],
+            density_volumes_[size_t(predicted_density)],
             velocity_volumes_[size_t(1 - velocity_index_)],
             divergence_volume_);
-        density_index_ = next_density;
+        source(5, "predictedDensityTexture", density_volumes_[size_t(predicted_density)]);
+        int corrected_density = (density_index_ + 2) % int(density_volumes_.size());
+        run(8,
+            density_volumes_[size_t(corrected_density)],
+            velocity_volumes_[size_t(1 - velocity_index_)],
+            divergence_volume_);
+        density_index_ = corrected_density;
     }
     glActiveTexture(GL_TEXTURE0);
 }

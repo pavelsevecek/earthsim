@@ -116,12 +116,13 @@ class Clouds {
     GLuint divergence_volume_ = 0;
     GLuint vapor_moisture_ = 0;
     GLuint terrain_height_texture_ = 0;
-    std::array<GLuint, 2> density_volumes_{};
+    std::array<GLuint, 3> density_volumes_{};
     std::array<GLuint, 2> velocity_volumes_{};
     std::array<GLuint, 2> pressure_volumes_{};
     int density_index_ = 0;
     int velocity_index_ = 0;
     int pressure_index_ = 0;
+    Vec3 equilibrium_offset_{};
     double simulation_accumulator_ = 0.0;
     int width_ = 0;
     int height_ = 0;
