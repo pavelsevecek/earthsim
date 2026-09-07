@@ -151,6 +151,7 @@ class AppState {
     bool camera_shake_enabled_ = true;
     bool source_icons_visible_ = true;
     bool flying_ = false;
+    bool aircraft_destroyed_ = false;
     Vec3 aircraft_position_{};
     Vec3 aircraft_velocity_{ 0, 0, 95 };
     Vec3 aircraft_forward_{ 0, 0, 1 };
@@ -158,7 +159,7 @@ class AppState {
     Vec3 aircraft_up_{ 0, 1, 0 };
     Vec3 flight_camera_offset_{ 0, 18, -52 };
     Vec3 flight_camera_center_{};
-    Vec3 flight_camera_up_{ 0, 1, 0 };
+    Vec3 flight_camera_horizontal_right_{ -1, 0, 0 };
     float flight_camera_yaw_offset_ = 0.0f;
     float flight_camera_pitch_offset_ = 0.0f;
     float flight_camera_distance_ = 55.0273f;
@@ -372,87 +373,102 @@ void AppState::frame() {
             return vector * cosine + cross(axis, vector) * sine +
                    axis * (dot(axis, vector) * (1.0f - cosine));
         };
-        aircraft_forward_ =
-            normalize(rotate(aircraft_forward_, aircraft_right_, pitch * 0.78f * dt));
-        aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_right_, pitch * 0.78f * dt));
-        aircraft_right_ =
-            normalize(rotate(aircraft_right_, aircraft_forward_, roll * 1.45f * dt));
-        aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_forward_, roll * 1.45f * dt));
-        aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
-        aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
+        if (!aircraft_destroyed_) {
+            aircraft_forward_ =
+                normalize(rotate(aircraft_forward_, aircraft_right_, pitch * 0.78f * dt));
+            aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_right_, pitch * 0.78f * dt));
+            aircraft_right_ =
+                normalize(rotate(aircraft_right_, aircraft_forward_, roll * 1.45f * dt));
+            aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_forward_, roll * 1.45f * dt));
+            aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
+            aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
 
-        float forward_speed = dot(aircraft_velocity_, aircraft_forward_);
-        Vec3 lateral_velocity = aircraft_velocity_ - aircraft_forward_ * forward_speed;
-        float speed = std::sqrt(dot(aircraft_velocity_, aircraft_velocity_));
-        float lift_scale = std::clamp(speed / 95.0f, 0.0f, 1.5f);
-        float lift = 22.0f * lift_scale * lift_scale;
-        Vec3 velocity_direction =
-            speed > 0.001f ? aircraft_velocity_ * (1.0f / speed) : aircraft_forward_;
-        Vec3 lift_direction =
-            aircraft_up_ - velocity_direction * dot(aircraft_up_, velocity_direction);
-        if (dot(lift_direction, lift_direction) > 0.0001f)
-            lift_direction = normalize(lift_direction);
-        else
-            lift_direction = aircraft_up_;
-        Vec3 acceleration = aircraft_forward_ * ((95.0f - forward_speed) * 1.8f) -
-                            lateral_velocity * 1.25f + lift_direction * lift +
-                            Vec3{ 0, -22.0f, 0 };
-        aircraft_velocity_ = aircraft_velocity_ + acceleration * dt;
-        float alignment = 1.0f - std::exp(-0.9f * dt);
-        velocity_direction = normalize(aircraft_velocity_);
-        aircraft_forward_ = normalize(aircraft_forward_ * (1.0f - alignment) +
-                                      velocity_direction * alignment);
-        aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
-        aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
-        Vec3 next_position = aircraft_position_ + aircraft_velocity_ * dt;
-        const Vec3 collision_points[] = { { 0, -0.75f, 0 },
-            { 0, 0, 9 },
-            { 0, 0, -7 },
-            { -10, 0, -2.2f },
-            { 10, 0, -2.2f } };
-        auto collision_correction = [&](Vec3 position) {
-            float correction = 0.0f;
+            float forward_speed = dot(aircraft_velocity_, aircraft_forward_);
+            Vec3 lateral_velocity = aircraft_velocity_ - aircraft_forward_ * forward_speed;
+            float speed = std::sqrt(dot(aircraft_velocity_, aircraft_velocity_));
+            float lift_scale = std::clamp(speed / 95.0f, 0.0f, 1.5f);
+            float lift = 22.0f * lift_scale * lift_scale;
+            Vec3 velocity_direction =
+                speed > 0.001f ? aircraft_velocity_ * (1.0f / speed) : aircraft_forward_;
+            Vec3 lift_direction =
+                aircraft_up_ - velocity_direction * dot(aircraft_up_, velocity_direction);
+            if (dot(lift_direction, lift_direction) > 0.0001f)
+                lift_direction = normalize(lift_direction);
+            else
+                lift_direction = aircraft_up_;
+            Vec3 acceleration = aircraft_forward_ * ((95.0f - forward_speed) * 1.8f) -
+                                lateral_velocity * 1.25f + lift_direction * lift +
+                                Vec3{ 0, -22.0f, 0 };
+            aircraft_velocity_ = aircraft_velocity_ + acceleration * dt;
+            float alignment = 1.0f - std::exp(-0.9f * dt);
+            velocity_direction = normalize(aircraft_velocity_);
+            aircraft_forward_ = normalize(aircraft_forward_ * (1.0f - alignment) +
+                                          velocity_direction * alignment);
+            aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
+            aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
+            Vec3 next_position = aircraft_position_ + aircraft_velocity_ * dt;
+            const Vec3 collision_points[] = { { 0, -0.75f, 0 },
+                { 0, 0, 9 },
+                { 0, 0, -7 },
+                { -10, 0, -2.2f },
+                { 10, 0, -2.2f } };
+            float terrain_correction = 0.0f;
+            float water_correction = 0.0f;
+            Vec3 terrain_impact = next_position;
+            Vec3 water_impact = { next_position.x, water_level_, next_position.z };
             for (Vec3 local : collision_points) {
-                Vec3 point = position + aircraft_right_ * local.x + aircraft_up_ * local.y +
+                Vec3 point = next_position + aircraft_right_ * local.x + aircraft_up_ * local.y +
                              aircraft_forward_ * local.z;
                 Vec3 terrain_normal;
-                float collision_height =
-                    std::max(terrain_.surface(point.x, point.z, terrain_normal), water_level_);
-                correction = std::max(correction, collision_height + 0.5f - point.y);
+                float terrain_height = terrain_.surface(point.x, point.z, terrain_normal);
+                float point_terrain_correction = terrain_height + 0.5f - point.y;
+                if (point_terrain_correction > terrain_correction) {
+                    terrain_correction = point_terrain_correction;
+                    terrain_impact = { point.x, terrain_height, point.z };
+                }
+                float point_water_correction = water_level_ + 0.5f - point.y;
+                if (point_water_correction > water_correction) {
+                    water_correction = point_water_correction;
+                    water_impact = { point.x, water_level_, point.z };
+                }
             }
-            return correction;
-        };
-        float vertical_correction = collision_correction(next_position);
-        if (vertical_correction > 0.0f) {
-            next_position.y += vertical_correction;
-            aircraft_velocity_.y = std::max(aircraft_velocity_.y, 0.0f);
-        }
-        aircraft_position_ = next_position;
+            float vertical_correction = std::max(terrain_correction, water_correction);
+            if (terrain_correction > 0.0f) {
+                aircraft_destroyed_ = true;
+                aircraft_velocity_ = {};
+                volcanoes_.impact(terrain_, terrain_impact, 0.35f);
+            } else if (water_correction > 0.0f) {
+                aircraft_destroyed_ = true;
+                aircraft_velocity_ = {};
+                volcanoes_.water_impact(water_impact, 0.35f);
+            }
+            if (vertical_correction > 0.0f) {
+                next_position.y += vertical_correction;
+                aircraft_velocity_.y = std::max(aircraft_velocity_.y, 0.0f);
+            }
+            aircraft_position_ = next_position;
 
-        if (particle_simulation_enabled_) {
-            aircraft_vapor_emission_ += 50.0f * dt;
-            size_t vapor_pairs = size_t(aircraft_vapor_emission_);
-            aircraft_vapor_emission_ -= float(vapor_pairs);
-            if (vapor_pairs > 0)
-                volcanoes_.add_aircraft_vapor(aircraft_position_,
-                    aircraft_forward_,
-                    aircraft_right_,
-                    aircraft_up_,
-                    vapor_pairs);
+            if (!aircraft_destroyed_ && particle_simulation_enabled_) {
+                aircraft_vapor_emission_ += 50.0f * dt;
+                size_t vapor_pairs = size_t(aircraft_vapor_emission_);
+                aircraft_vapor_emission_ -= float(vapor_pairs);
+                if (vapor_pairs > 0)
+                    volcanoes_.add_aircraft_vapor(aircraft_position_,
+                        aircraft_forward_,
+                        aircraft_right_,
+                        aircraft_up_,
+                        vapor_pairs);
+            }
         }
 
-        Vec3 desired_offset = aircraft_forward_ * -52.0f + aircraft_up_ * 18.0f;
+        const Vec3 world_up{ 0, 1, 0 };
+        Vec3 desired_offset = aircraft_forward_ * -52.0f + world_up * 18.0f;
         desired_offset = normalize(desired_offset) * flight_camera_distance_;
-        Vec3 desired_camera_forward = normalize(desired_offset * -1.0f);
-        Vec3 desired_camera_up =
-            normalize(cross(aircraft_right_, desired_camera_forward));
         float rotation_blend = 1.0f - std::exp(-1.6f * dt);
         flight_camera_offset_ =
             normalize(flight_camera_offset_ * (1.0f - rotation_blend) +
                       desired_offset * rotation_blend) *
             flight_camera_distance_;
-        flight_camera_up_ = normalize(flight_camera_up_ * (1.0f - rotation_blend) +
-                                      desired_camera_up * rotation_blend);
         float position_blend = 1.0f - std::exp(-4.0f * dt);
         flight_camera_center_ = flight_camera_center_ +
                                 (aircraft_position_ - flight_camera_center_) * position_blend;
@@ -461,9 +477,12 @@ void AppState::frame() {
         Vec3 camera_offset =
             flight_camera_center_ - aircraft_position_ + flight_camera_offset_;
         camera_offset = rotate(
-            camera_offset, flight_camera_up_, flight_camera_yaw_offset_);
+            camera_offset, world_up, flight_camera_yaw_offset_);
         Vec3 camera_forward = normalize(camera_offset * -1.0f);
-        Vec3 orbit_right = normalize(cross(camera_forward, flight_camera_up_));
+        Vec3 horizontal_right = cross(camera_forward, world_up);
+        if (dot(horizontal_right, horizontal_right) > 0.0001f)
+            flight_camera_horizontal_right_ = normalize(horizontal_right);
+        Vec3 orbit_right = flight_camera_horizontal_right_;
         camera_offset = rotate(
             camera_offset, orbit_right, flight_camera_pitch_offset_);
         camera_forward = normalize(camera_offset * -1.0f);
@@ -605,7 +624,7 @@ void AppState::frame() {
         true,
         water_level_,
         eye.y >= water_level_ ? 1.0f : -1.0f);
-    if (flying_) {
+    if (flying_ && !aircraft_destroyed_) {
         glDisable(GL_CLIP_DISTANCE0);
         aircraft_renderer_.draw(reflection_vp,
             aircraft_position_,
@@ -706,7 +725,7 @@ void AppState::frame() {
         fog,
         daylight,
         atmosphere_opacity_);
-    if (flying_)
+    if (flying_ && !aircraft_destroyed_)
         aircraft_renderer_.draw(vp,
             aircraft_position_,
             aircraft_forward_,
@@ -1046,16 +1065,17 @@ void AppState::frame() {
             aircraft_right_ = normalize(cross(aircraft_forward_, Vec3{ 0, 1, 0 }));
             aircraft_up_ = { 0, 1, 0 };
             aircraft_velocity_ = aircraft_forward_ * 95.0f;
+            aircraft_destroyed_ = false;
             Vec3 terrain_normal;
             float surface = terrain_.surface(target_.x, target_.z, terrain_normal);
             aircraft_position_ =
                 { target_.x, std::max(surface + 160.0f, water_level_ + 120.0f), target_.z };
+            flight_camera_distance_ = 55.0273f;
             flight_camera_offset_ =
-                normalize(aircraft_forward_ * -52.0f + aircraft_up_ * 18.0f) *
+                normalize(aircraft_forward_ * -52.0f + Vec3{ 0, 18.0f, 0 }) *
                 flight_camera_distance_;
             flight_camera_center_ = aircraft_position_;
-            flight_camera_up_ = normalize(
-                cross(aircraft_right_, normalize(flight_camera_offset_ * -1.0f)));
+            flight_camera_horizontal_right_ = aircraft_right_;
             flight_camera_yaw_offset_ = 0.0f;
             flight_camera_pitch_offset_ = 0.0f;
             aircraft_vapor_emission_ = 0.0f;
