@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include "Rendering.hpp"
+#include <limits>
 #include <sstream>
 
 #include <imgui_impl_opengl3.h>
@@ -153,6 +154,7 @@ class AppState {
     bool camera_shake_enabled_ = true;
     bool source_icons_visible_ = true;
     bool flying_ = false;
+    bool autopilot_enabled_ = false;
     bool aircraft_destroyed_ = false;
     Vec3 aircraft_position_{};
     Vec3 aircraft_velocity_{ 0, 0, 47.5f };
@@ -362,7 +364,62 @@ void AppState::frame() {
     if (flying_) {
         float roll = 0.0f;
         float pitch = 0.0f;
-        if (!io.WantCaptureKeyboard && focused) {
+        bool keyboard_control_available = !io.WantCaptureKeyboard && focused;
+        bool manual_steering = keyboard_control_available &&
+                               (ImGui::IsKeyDown(ImGuiKey_W) ||
+                                   ImGui::IsKeyDown(ImGuiKey_S) ||
+                                   ImGui::IsKeyDown(ImGuiKey_A) ||
+                                   ImGui::IsKeyDown(ImGuiKey_D));
+        if (autopilot_enabled_ && manual_steering)
+            autopilot_enabled_ = false;
+        if (autopilot_enabled_ && !aircraft_destroyed_) {
+            float minimum_clearance = std::numeric_limits<float>::max();
+            constexpr float look_ahead_times[] = { 0.0f, 1.0f, 2.0f, 3.0f };
+            for (float look_ahead : look_ahead_times) {
+                Vec3 sample_position = aircraft_position_ + aircraft_velocity_ * look_ahead;
+                Vec3 terrain_normal;
+                float surface = std::max(
+                    terrain_.surface(sample_position.x, sample_position.z, terrain_normal),
+                    water_level_);
+                minimum_clearance = std::min(minimum_clearance, sample_position.y - surface);
+            }
+            if (minimum_clearance < 45.0f)
+                pitch = 1.0f;
+
+            constexpr float map_half_extent = 500.0f;
+            Vec3 predicted_position = aircraft_position_ + aircraft_velocity_ * 4.0f;
+            float edge_distance = std::max(std::max(std::abs(aircraft_position_.x),
+                                               std::abs(aircraft_position_.z)),
+                std::max(std::abs(predicted_position.x), std::abs(predicted_position.z)));
+            Vec3 level_up = Vec3{ 0, 1, 0 } -
+                            aircraft_forward_ * dot(Vec3{ 0, 1, 0 }, aircraft_forward_);
+            if (dot(level_up, level_up) > 0.0001f) {
+                level_up = normalize(level_up);
+                Vec3 desired_up = level_up;
+                Vec3 horizontal_heading{ aircraft_forward_.x, 0, aircraft_forward_.z };
+                Vec3 toward_center{ -aircraft_position_.x, 0, -aircraft_position_.z };
+                if (edge_distance > map_half_extent &&
+                    dot(horizontal_heading, horizontal_heading) > 0.0001f &&
+                    dot(toward_center, toward_center) > 0.0001f) {
+                    horizontal_heading = normalize(horizontal_heading);
+                    toward_center = normalize(toward_center);
+                    float turn_factor = 3.f * (edge_distance / map_half_extent - 1.f);
+                    if (dot(horizontal_heading, toward_center) < 0.5f) {
+                        Vec3 level_right = normalize(cross(aircraft_forward_, level_up));
+                        float turn_side = dot(toward_center, level_right) >= 0.0f ? 1.0f : -1.0f;
+                        desired_up = normalize(level_up + level_right * (turn_side * turn_factor));
+                    }
+                }
+                float up_alignment = dot(aircraft_up_, desired_up);
+                if (up_alignment < 0.995f) {
+                    float roll_direction =
+                        dot(aircraft_forward_, cross(aircraft_up_, desired_up));
+                    if (std::abs(roll_direction) < 0.0001f && up_alignment < 0.0f)
+                        roll_direction = 1.0f;
+                    roll = roll_direction >= 0.0f ? 1.0f : -1.0f;
+                }
+            }
+        } else if (keyboard_control_available) {
             roll = (ImGui::IsKeyDown(ImGuiKey_D) ? 1.0f : 0.0f) -
                    (ImGui::IsKeyDown(ImGuiKey_A) ? 1.0f : 0.0f);
             pitch = (ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f) -
@@ -1060,12 +1117,23 @@ void AppState::frame() {
     }
     const ImVec2 close_button_size(36.0f * ui_scale, 36.0f * ui_scale);
     const ImVec2 flight_button_size(62.0f * ui_scale, 36.0f * ui_scale);
+    if (flying_) {
+        const ImVec2 autopilot_button_size(105.0f * ui_scale, 36.0f * ui_scale);
+        ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - close_button_size.x -
+                                      flight_button_size.x - autopilot_button_size.x -
+                                      30.0f * ui_scale,
+            7.0f * ui_scale));
+        if (ImGui::Button(
+                autopilot_enabled_ ? "Autopilot: On" : "Autopilot", autopilot_button_size))
+            autopilot_enabled_ = !autopilot_enabled_;
+    }
     ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - close_button_size.x -
                                   flight_button_size.x - 20.0f * ui_scale,
         7.0f * ui_scale));
     if (ImGui::Button(flying_ ? "Stop" : "Fly", flight_button_size)) {
         if (flying_) {
             flying_ = false;
+            autopilot_enabled_ = false;
             cloud_simulation_enabled_ = true;
         } else {
             cloud_simulation_enabled_ = false;
@@ -1096,6 +1164,7 @@ void AppState::frame() {
             flight_camera_yaw_offset_ = 0.0f;
             flight_camera_pitch_offset_ = 0.0f;
             aircraft_vapor_emission_ = 0.0f;
+            autopilot_enabled_ = false;
             flying_ = true;
         }
     }
