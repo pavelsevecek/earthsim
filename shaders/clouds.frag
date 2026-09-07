@@ -89,7 +89,7 @@ vec3 godRayScattering(vec3 ray, float rayLimit, float jitter) {
         float localDensity = exp(-max(p.y, 0.0) / 1500.0);
         float stepTransmittance = exp(-stride * 0.0005 * atmosphereOpacity * localDensity);
         scattering += transmittance * (1.0 - stepTransmittance)
-            * cloudVisibility * phase * sunlight * sunColor * 40.0;
+            * cloudVisibility * phase * sunlight * sunColor * 20.0;
         transmittance *= stepTransmittance;
     }
     return scattering;

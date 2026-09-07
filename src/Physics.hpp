@@ -104,12 +104,16 @@ private:
     float spring_emission_ = 0;
     float lava_spawn_rate_ = 90.0f;
     float spring_spawn_rate_ = 90.0f;
+    double until_next_meteor_ = -1;
+    float meteor_frequency_ = 1.0f;
+    float scheduled_meteor_frequency_ = 1.0f;
     float particle_lifetime_ = 33.0f;
     float particle_brightness_ = 1.0f;
     float erosion_speed_ = 50.0f;
     bool erosion_simulation_enabled_ = true;
     bool particle_interactions_ = true;
     float range(float low, float high);
+    double meteor_interval();
     void add_surface_particles(
         const Terrain& terrain, Vec3 center, float radius, float spacing, bool water);
 
@@ -146,6 +150,8 @@ public:
     void set_lava_spawn_rate(float rate);
     float spring_spawn_rate() const;
     void set_spring_spawn_rate(float rate);
+    float meteor_frequency() const;
+    void set_meteor_frequency(float frequency);
     float erosion_speed() const;
     void set_erosion_speed(float speed);
     bool erosion_simulation_enabled() const;
@@ -160,8 +166,12 @@ public:
     void lightning_water_impact(Vec3 position, size_t particle_count);
     void add_aircraft_vapor(
         Vec3 position, Vec3 forward, Vec3 right, Vec3 up, size_t particle_pairs);
-    void update(
-        Terrain& terrain, double elapsed, float water_level, float wind_speed, Vec3 wind_direction);
+    void update(Terrain& terrain,
+        double elapsed,
+        float water_level,
+        float wind_speed,
+        Vec3 wind_direction,
+        float meteor_size_scale);
     void prepare_draw(const Mat4& vp,
         const Mat4& light_vp,
         GLuint shadow_map,
@@ -229,6 +239,8 @@ class Lightning {
     double until_next_ = -1;
     float frequency_ = 6.0f;
     float scheduled_frequency_ = 6.0f;
+    void spawn_between(
+        const Terrain& terrain, Vec3 origin, Vec3 target, float water_level, Volcanoes& particles);
 
 public:
     explicit Lightning(const std::filesystem::path& directory);
@@ -237,6 +249,12 @@ public:
     std::vector<Vec3> path(Vec3 start, Vec3 end, int count, float jitter);
     void append_path(Strike& strike, const std::vector<Vec3>& points, float strength, float width);
     void spawn(const Terrain& terrain,
+        float water_level,
+        float cloud_base,
+        float cloud_top,
+        Volcanoes& particles);
+    void spawn_at(const Terrain& terrain,
+        Vec3 target,
         float water_level,
         float cloud_base,
         float cloud_top,

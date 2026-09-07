@@ -185,6 +185,7 @@ class AppState {
         Spring,
         Meteor,
         Explosion,
+        Lightning,
         TornadoOrigin,
         TornadoDirection,
         TerrainUp,
@@ -207,6 +208,7 @@ class AppState {
     double previous_;
     double simulation_time_ = 0.0;
     double day_time_ = 0.0;
+    std::mt19937 random_{ std::random_device{}() };
 
 public:
     AppState(GLFWwindow* window, const char* executable_path)
@@ -251,7 +253,8 @@ void AppState::frame() {
     Vec3 wind_direction{ std::cos(wind_direction_), 0.0f, std::sin(wind_direction_) };
     float cloud_top = cloud_base_ + cloud_thickness_;
     if (particle_simulation_enabled_)
-        volcanoes_.update(terrain_, elapsed, water_level_, wind_speed_, wind_direction);
+        volcanoes_.update(
+            terrain_, elapsed, water_level_, wind_speed_, wind_direction, meteor_size_);
     auto impact_strengths = volcanoes_.take_impact_strengths();
     if (camera_shake_enabled_) {
         for (float strength : impact_strengths)
@@ -876,8 +879,15 @@ void AppState::frame() {
                         volcanoes_.explosion_water_impact(
                             { position.x, water_level_, position.z }, physical_size);
                         explosions_.explode(position, physical_size);
-                    }
-                    if (placement_ != PlacementTool::Meteor)
+                    } else if (placement_ == PlacementTool::Lightning)
+                        lightning_.spawn_at(terrain_,
+                            position,
+                            water_level_,
+                            cloud_base_,
+                            cloud_top,
+                            volcanoes_);
+                    if (placement_ != PlacementTool::Meteor &&
+                        placement_ != PlacementTool::Lightning)
                         placement_ = PlacementTool::None;
                     placement_miss_ = false;
                 }
@@ -1048,6 +1058,7 @@ void AppState::frame() {
             { PlacementTool::RoughenTerrain, "##roughen", "Roughen terrain", 8 },
             { PlacementTool::AddWater, "##water", "Add water", 9 },
             { PlacementTool::AddLava, "##lava", "Add lava", 10 },
+            { PlacementTool::Lightning, "##lightning", "Lightning strike", 11 },
         };
         const ImTextureID placement_texture =
             static_cast<ImTextureID>(static_cast<intptr_t>(placement_tools_texture_));
@@ -1084,6 +1095,7 @@ void AppState::frame() {
                 : placement_ == PlacementTool::Spring    ? "Click terrain to place a spring."
                 : placement_ == PlacementTool::Meteor    ? "Click terrain to target a meteor."
                 : placement_ == PlacementTool::Explosion ? "Click terrain to detonate an explosion."
+                : placement_ == PlacementTool::Lightning ? "Click terrain to call down lightning."
                 : placement_ == PlacementTool::TornadoOrigin
                     ? "Click terrain to set the tornado origin."
                 : placement_ == PlacementTool::TornadoDirection
@@ -1142,19 +1154,34 @@ void AppState::frame() {
             selected_source_type_ = SourceType::None;
             panning_ = false;
             rotating_ = false;
-            Vec3 direction{ forward.x, 0, forward.z };
-            if (dot(direction, direction) < 0.001f)
-                direction = { 0, 0, 1 };
-            direction = normalize(direction);
-            aircraft_forward_ = direction;
+            constexpr float spawn_edge = 950.0f;
+            std::uniform_int_distribution<int> edge_distribution(0, 3);
+            std::uniform_real_distribution<float> edge_position_distribution(-900.0f, 900.0f);
+            float edge_position = edge_position_distribution(random_);
+            Vec3 spawn_position{};
+            switch (edge_distribution(random_)) {
+            case 0:
+                spawn_position = { -spawn_edge, 0, edge_position };
+                break;
+            case 1:
+                spawn_position = { spawn_edge, 0, edge_position };
+                break;
+            case 2:
+                spawn_position = { edge_position, 0, -spawn_edge };
+                break;
+            default:
+                spawn_position = { edge_position, 0, spawn_edge };
+                break;
+            }
+            aircraft_forward_ = normalize(Vec3{ -spawn_position.x, 0, -spawn_position.z });
             aircraft_right_ = normalize(cross(aircraft_forward_, Vec3{ 0, 1, 0 }));
             aircraft_up_ = { 0, 1, 0 };
             aircraft_velocity_ = aircraft_forward_ * 47.5f;
             aircraft_destroyed_ = false;
             Vec3 terrain_normal;
-            float surface = terrain_.surface(target_.x, target_.z, terrain_normal);
-            aircraft_position_ =
-                { target_.x, std::max(surface + 160.0f, water_level_ + 120.0f), target_.z };
+            float surface = terrain_.surface(spawn_position.x, spawn_position.z, terrain_normal);
+            spawn_position.y = std::max(surface + 160.0f, water_level_ + 120.0f);
+            aircraft_position_ = spawn_position;
             flight_camera_distance_ = 55.0273f;
             flight_camera_offset_ =
                 normalize(aircraft_forward_ * -52.0f + Vec3{ 0, 18.0f, 0 }) *
@@ -1178,10 +1205,10 @@ void AppState::frame() {
     ImGui::SetNextWindowPos(
         ImVec2(20 * ui_scale, (toolbar_height + 14.0f) * ui_scale), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.78f);
-    // ImGuiViewport* viewport = ImGui::GetMainViewport();
-    // ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x / 2, viewport->WorkSize.y - 10),
-    // ImGuiCond_Always);
-    
+    const float panel_height = io.DisplaySize.y * 0.9f;
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(0.0f, panel_height), ImVec2(io.DisplaySize.x, panel_height));
+
     static std::string label = "###earthsim";
     bool expanded = ImGui::Begin(label.c_str(),
         nullptr,
@@ -1240,6 +1267,11 @@ void AppState::frame() {
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Meteor size", &meteor_size_, 0.1f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    float meteor_frequency = volcanoes_.meteor_frequency();
+    if (ImGui::DragFloat(
+            "Meteor frequency", &meteor_frequency, 1.f, 0.f, 1.e6f, "%.1f / min"))
+        volcanoes_.set_meteor_frequency(meteor_frequency);
     ImGui::SetNextItemWidth(180 * ui_scale);
     ImGui::SliderFloat(
         "Explosion size", &explosion_size_, 0.25f, 5.0f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);

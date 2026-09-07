@@ -351,6 +351,11 @@ float Volcanoes::range(float low, float high) {
     return std::uniform_real_distribution<float>(low, high)(random_);
 }
 
+double Volcanoes::meteor_interval() {
+    double rate = std::max(double(meteor_frequency_) / 60.0, 1e-6);
+    return std::exponential_distribution<double>(rate)(random_);
+}
+
 Volcanoes::Volcanoes(const std::filesystem::path& directory, const Terrain& terrain)
     : gpu_(directory, terrain) {
     Vec3 reference = blackbody(1600);
@@ -577,6 +582,14 @@ void Volcanoes::set_spring_spawn_rate(float rate) {
     spring_spawn_rate_ = std::max(0.0f, rate);
 }
 
+float Volcanoes::meteor_frequency() const {
+    return meteor_frequency_;
+}
+
+void Volcanoes::set_meteor_frequency(float frequency) {
+    meteor_frequency_ = frequency;
+}
+
 float Volcanoes::erosion_speed() const {
     return erosion_speed_;
 }
@@ -741,7 +754,8 @@ void Volcanoes::update(Terrain& terrain,
     double elapsed,
     float water_level,
     float wind_speed,
-    Vec3 wind_direction) {
+    Vec3 wind_direction,
+    float meteor_size_scale) {
     constexpr float dt = 1.0f / 120.0f;
     // The shared clock bounds real elapsed time before applying the speed multiplier.
     std::vector<int32_t> erosion_delta;
@@ -751,6 +765,26 @@ void Volcanoes::update(Terrain& terrain,
             terrain.apply_height_deltas(erosion_delta, 1.0f / GpuSimulation::terrain_delta_scale_);
     if (terrain_eroded)
         terrain_changed(terrain);
+
+    if (meteor_frequency_ != scheduled_meteor_frequency_) {
+        scheduled_meteor_frequency_ = meteor_frequency_;
+        until_next_meteor_ = -1;
+    }
+    if (meteor_frequency_ <= 0) {
+        until_next_meteor_ = -1;
+    } else {
+        if (until_next_meteor_ < 0)
+            until_next_meteor_ = meteor_interval();
+        until_next_meteor_ -= elapsed;
+        while (until_next_meteor_ <= 0) {
+            float target_x = range(-900.0f, 900.0f);
+            float target_z = range(-900.0f, 900.0f);
+            Vec3 normal;
+            float target_y = terrain.surface(target_x, target_z, normal);
+            launch_meteor({ target_x, target_y, target_z }, meteor_size_scale);
+            until_next_meteor_ += meteor_interval();
+        }
+    }
 
     accumulator_ += elapsed;
     erosion_readback_accumulator_ += elapsed;
@@ -1151,10 +1185,31 @@ void Lightning::spawn(const Terrain& terrain,
         range(-820, 820) };
     float target_x = std::clamp(origin.x + range(-180, 180), -980.0f, 980.0f);
     float target_z = std::clamp(origin.z + range(-180, 180), -980.0f, 980.0f);
+    spawn_between(terrain, origin, { target_x, 0, target_z }, water_level, particles);
+}
+
+void Lightning::spawn_at(const Terrain& terrain,
+    Vec3 target,
+    float water_level,
+    float cloud_base,
+    float cloud_top,
+    Volcanoes& particles) {
+    target.x = std::clamp(target.x, -980.0f, 980.0f);
+    target.z = std::clamp(target.z, -980.0f, 980.0f);
+    Vec3 origin{ std::clamp(target.x + range(-180, 180), -820.0f, 820.0f),
+        range(cloud_base + 0.33f * (cloud_top - cloud_base), cloud_top - 30.0f),
+        std::clamp(target.z + range(-180, 180), -820.0f, 820.0f) };
+    spawn_between(terrain, origin, target, water_level, particles);
+}
+
+void Lightning::spawn_between(
+    const Terrain& terrain, Vec3 origin, Vec3 target, float water_level, Volcanoes& particles) {
+    target.x = std::clamp(target.x, -980.0f, 980.0f);
+    target.z = std::clamp(target.z, -980.0f, 980.0f);
     Vec3 normal;
-    float ground = terrain.surface(target_x, target_z, normal);
+    float ground = terrain.surface(target.x, target.z, normal);
     bool hits_water = ground < water_level;
-    Vec3 target{ target_x, (hits_water ? water_level : ground) + 1.0f, target_z };
+    target.y = (hits_water ? water_level : ground) + 1.0f;
     Strike strike;
     auto main_path = path(origin, target, 22, 24.0f);
     append_path(strike, main_path, 1.0f, 0.85f);
