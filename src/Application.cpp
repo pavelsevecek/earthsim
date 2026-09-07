@@ -266,7 +266,7 @@ void AppState::frame() {
         volcanoes_.terrain_texture());
     lightning_.update(terrain_, elapsed, water_level_, cloud_base_, cloud_top, volcanoes_);
     static const std::vector<Volcanoes::Meteor> no_moving_meteors;
-    if (cloud_simulation_enabled_)
+    if (cloud_simulation_enabled_ && !flying_)
         clouds_.update(elapsed,
             float(simulation_time_),
             particle_simulation_enabled_ ? volcanoes_.meteors() : no_moving_meteors,
@@ -449,7 +449,7 @@ void AppState::frame() {
             aircraft_position_ = next_position;
 
             if (!aircraft_destroyed_ && particle_simulation_enabled_) {
-                aircraft_vapor_emission_ += 50.0f * dt;
+                aircraft_vapor_emission_ += 100.0f * dt;
                 size_t vapor_pairs = size_t(aircraft_vapor_emission_);
                 aircraft_vapor_emission_ -= float(vapor_pairs);
                 if (vapor_pairs > 0)
@@ -1051,7 +1051,9 @@ void AppState::frame() {
     if (ImGui::Button(flying_ ? "Stop" : "Fly", flight_button_size)) {
         if (flying_) {
             flying_ = false;
+            cloud_simulation_enabled_ = true;
         } else {
+            cloud_simulation_enabled_ = false;
             placement_ = PlacementTool::None;
             placement_miss_ = false;
             selected_source_type_ = SourceType::None;
@@ -1218,7 +1220,11 @@ void AppState::frame() {
         rain_.set_intensity(rain_intensity);
     ImGui::Checkbox("Clouds", &clouds_enabled_);
     ImGui::Checkbox("Cloud shadows", &cloud_shadows_enabled_);
+    if (flying_)
+        ImGui::BeginDisabled();
     ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);
+    if (flying_)
+        ImGui::EndDisabled();
     if (ImGui::Button("Clear clouds"))
         clouds_.clear_density();
     ImGui::SameLine();

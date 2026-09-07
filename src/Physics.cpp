@@ -728,7 +728,7 @@ void Volcanoes::add_aircraft_vapor(
                  right * range(-0.35f, 0.35f) + up * range(-0.25f, 0.25f);
         Vec3 velocity = forward * range(55.0f, 68.0f) + right * range(-0.6f, 0.6f) +
                         up * range(-0.3f, 0.8f);
-        float size = range(1.2f, 2.0f);
+        float size = range(0.6f, 1.2f);
         // Vapor plus a burst tag retains the aircraft's wake velocity.
         records.push_back({ { p.x, p.y, p.z, 0 },
             { velocity.x, velocity.y, velocity.z, 0 },
