@@ -10,6 +10,8 @@ uniform vec3 sunDirection;
 uniform float daylight;
 uniform vec3 fogColor;
 uniform float atmosphereOpacity;
+uniform bool aircraftShadowEnabled;
+uniform vec3 aircraftPosition;
 uniform usampler2D terrainScorched;
 layout(std430,binding=7) readonly buffer TerrainWetness { uint wetness[]; };
 out vec4 fragColor;
@@ -81,6 +83,17 @@ void main() {
     float wetHighlight=pow(max(dot(reflect(-sunDirection,n),viewDirection),0.0),72.0)
         *wetAmount*daylight*terrainVisibility(0,geometricNormal,sunDirection)*cloudVisibility;
     color+=sunlight*wetHighlight*0.7;
+    if(aircraftShadowEnabled) {
+        float aircraftHeight=aircraftPosition.y-worldPosition.y;
+        float heightFactor=clamp(aircraftHeight/250.0,0.0,1.0);
+        float radius=mix(5.0,14.0,heightFactor);
+        float distanceFromShadow=length(worldPosition.xz-aircraftPosition.xz)/radius;
+        float blob=1.0-smoothstep(0.1,1.0,distanceFromShadow);
+        float altitudeFade=1.0-smoothstep(300.0,600.0,aircraftHeight);
+        float belowAircraft=step(0.0,aircraftHeight);
+        float opacity=mix(0.48,0.16,heightFactor)*blob*altitudeFade*belowAircraft;
+        color*=1.0-opacity;
+    }
     float fog = 1.0 - exp(-hazeOpticalDepth(length(eye-worldPosition)));
     color = mix(color, fogColor, fog);
     fragColor = vec4(max(color, vec3(0.0)), 1.0);

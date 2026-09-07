@@ -1,6 +1,7 @@
 #include "Application.hpp"
 
 #include "Rendering.hpp"
+#include <sstream>
 
 #include <imgui_impl_opengl3.h>
 
@@ -154,7 +155,7 @@ class AppState {
     bool flying_ = false;
     bool aircraft_destroyed_ = false;
     Vec3 aircraft_position_{};
-    Vec3 aircraft_velocity_{ 0, 0, 95 };
+    Vec3 aircraft_velocity_{ 0, 0, 47.5f };
     Vec3 aircraft_forward_{ 0, 0, 1 };
     Vec3 aircraft_right_{ -1, 0, 0 };
     Vec3 aircraft_up_{ 0, 1, 0 };
@@ -392,7 +393,7 @@ void AppState::frame() {
             float forward_speed = dot(aircraft_velocity_, aircraft_forward_);
             Vec3 lateral_velocity = aircraft_velocity_ - aircraft_forward_ * forward_speed;
             float speed = std::sqrt(dot(aircraft_velocity_, aircraft_velocity_));
-            float lift_scale = std::clamp(speed / 95.0f, 0.0f, 1.5f);
+            float lift_scale = std::clamp(speed / 47.5f, 0.0f, 1.5f);
             float lift = 22.0f * lift_scale * lift_scale;
             Vec3 velocity_direction =
                 speed > 0.001f ? aircraft_velocity_ * (1.0f / speed) : aircraft_forward_;
@@ -402,7 +403,7 @@ void AppState::frame() {
                 lift_direction = normalize(lift_direction);
             else
                 lift_direction = aircraft_up_;
-            Vec3 acceleration = aircraft_forward_ * ((95.0f - forward_speed) * 1.8f) -
+            Vec3 acceleration = aircraft_forward_ * ((47.5f - forward_speed) * 1.8f) -
                                 lateral_velocity * 1.25f + lift_direction * lift +
                                 Vec3{ 0, -22.0f, 0 };
             aircraft_velocity_ = aircraft_velocity_ + acceleration * flight_dt;
@@ -413,11 +414,11 @@ void AppState::frame() {
             aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
             aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
             Vec3 next_position = aircraft_position_ + aircraft_velocity_ * flight_dt;
-            const Vec3 collision_points[] = { { 0, -0.75f, 0 },
-                { 0, 0, 9 },
-                { 0, 0, -7 },
-                { -10, 0, -2.2f },
-                { 10, 0, -2.2f } };
+            const Vec3 collision_points[] = { { 0, -0.375f, 0 },
+                { 0, 0, 4.5f },
+                { 0, 0, -3.5f },
+                { -5, 0, -1.1f },
+                { 5, 0, -1.1f } };
             float terrain_correction = 0.0f;
             float water_correction = 0.0f;
             Vec3 terrain_impact = next_position;
@@ -427,12 +428,12 @@ void AppState::frame() {
                              aircraft_forward_ * local.z;
                 Vec3 terrain_normal;
                 float terrain_height = terrain_.surface(point.x, point.z, terrain_normal);
-                float point_terrain_correction = terrain_height + 0.5f - point.y;
+                float point_terrain_correction = terrain_height + 0.25f - point.y;
                 if (point_terrain_correction > terrain_correction) {
                     terrain_correction = point_terrain_correction;
                     terrain_impact = { point.x, terrain_height, point.z };
                 }
-                float point_water_correction = water_level_ + 0.5f - point.y;
+                float point_water_correction = water_level_ + 0.25f - point.y;
                 if (point_water_correction > water_correction) {
                     water_correction = point_water_correction;
                     water_impact = { point.x, water_level_, point.z };
@@ -442,7 +443,7 @@ void AppState::frame() {
             if (terrain_correction > 0.0f) {
                 aircraft_destroyed_ = true;
                 aircraft_velocity_ = {};
-                volcanoes_.impact(terrain_, terrain_impact, 0.35f);
+                volcanoes_.impact(terrain_, terrain_impact, 0.175f);
             } else if (water_correction > 0.0f) {
                 aircraft_destroyed_ = true;
                 aircraft_velocity_ = {};
@@ -455,7 +456,7 @@ void AppState::frame() {
             aircraft_position_ = next_position;
 
             if (!aircraft_destroyed_ && particle_simulation_enabled_) {
-                aircraft_vapor_emission_ += 100.0f * flight_dt;
+                aircraft_vapor_emission_ += 50.0f * flight_dt;
                 size_t vapor_pairs = size_t(aircraft_vapor_emission_);
                 aircraft_vapor_emission_ -= float(vapor_pairs);
                 if (vapor_pairs > 0)
@@ -628,6 +629,8 @@ void AppState::frame() {
         fog,
         daylight,
         atmosphere_opacity_,
+        flying_ && !aircraft_destroyed_,
+        aircraft_position_,
         true,
         water_level_,
         eye.y >= water_level_ ? 1.0f : -1.0f);
@@ -732,7 +735,9 @@ void AppState::frame() {
         sun,
         fog,
         daylight,
-        atmosphere_opacity_);
+        atmosphere_opacity_,
+        flying_ && !aircraft_destroyed_,
+        aircraft_position_);
     if (flying_ && !aircraft_destroyed_)
         aircraft_renderer_.draw(vp,
             aircraft_position_,
@@ -1076,7 +1081,7 @@ void AppState::frame() {
             aircraft_forward_ = direction;
             aircraft_right_ = normalize(cross(aircraft_forward_, Vec3{ 0, 1, 0 }));
             aircraft_up_ = { 0, 1, 0 };
-            aircraft_velocity_ = aircraft_forward_ * 95.0f;
+            aircraft_velocity_ = aircraft_forward_ * 47.5f;
             aircraft_destroyed_ = false;
             Vec3 terrain_normal;
             float surface = terrain_.surface(target_.x, target_.z, terrain_normal);
@@ -1107,11 +1112,21 @@ void AppState::frame() {
     // ImGuiViewport* viewport = ImGui::GetMainViewport();
     // ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x / 2, viewport->WorkSize.y - 10),
     // ImGuiCond_Always);
-    ImGui::Begin("##EarthSim",
+    
+    static std::string label = "###earthsim";
+    bool expanded = ImGui::Begin(label.c_str(),
         nullptr,
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     float time_of_day_hours = day * 24.0f;
+    if (expanded) {
+        label = "###earthsim";
+    } else {
+        std::stringstream ss;
+        ss << std::setprecision(2) << std::fixed << time_of_day_hours;
+        label = "Time of day: " + ss.str() + " h###earthsim";
+    }
+
     ImGui::SetNextItemWidth(180 * ui_scale);
     if (ImGui::SliderFloat("Time of day",
             &time_of_day_hours,

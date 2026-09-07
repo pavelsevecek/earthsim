@@ -60,6 +60,8 @@ public:
         Vec3 fog,
         float daylight,
         float atmosphere_opacity,
+        bool aircraft_shadow_enabled,
+        Vec3 aircraft_position,
         bool clip_enabled = false,
         float clip_height = 0.0f,
         float clip_direction = 1.0f);

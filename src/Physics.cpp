@@ -724,11 +724,11 @@ void Volcanoes::add_aircraft_vapor(
     records.reserve(particle_pairs * 2);
     for (size_t i = 0; i < particle_pairs * 2; ++i) {
         float side = (i & 1) == 0 ? -1.0f : 1.0f;
-        Vec3 p = position - forward * 7.5f + right * (side * 7.5f) +
-                 right * range(-0.35f, 0.35f) + up * range(-0.25f, 0.25f);
-        Vec3 velocity = forward * range(55.0f, 68.0f) + right * range(-0.6f, 0.6f) +
-                        up * range(-0.3f, 0.8f);
-        float size = range(0.6f, 1.2f);
+        Vec3 p = position - forward * 3.75f + right * (side * 3.75f) +
+                  right * range(-0.175f, 0.175f) + up * range(-0.125f, 0.125f);
+        Vec3 velocity = forward * range(27.5f, 34.0f) + right * range(-0.3f, 0.3f) +
+                        up * range(-0.15f, 0.4f);
+        float size = range(0.3f, 0.6f);
         // Vapor plus a burst tag retains the aircraft's wake velocity.
         records.push_back({ { p.x, p.y, p.z, 0 },
             { velocity.x, velocity.y, velocity.z, 0 },

@@ -43,7 +43,11 @@ AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory) {
         Vec3 color;
     };
     std::vector<Vertex> vertices;
+    constexpr float aircraft_scale = 0.5f;
     auto triangle = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 color) {
+        a = a * aircraft_scale;
+        b = b * aircraft_scale;
+        c = c * aircraft_scale;
         Vec3 normal = normalize(cross(b - a, c - a));
         vertices.insert(vertices.end(),
             { { a, normal, color }, { b, normal, color }, { c, normal, color } });
@@ -183,6 +187,8 @@ void TerrainRenderer::draw(const Terrain& terrain,
     Vec3 fog,
     float daylight,
     float atmosphere_opacity,
+    bool aircraft_shadow_enabled,
+    Vec3 aircraft_position,
     bool clip_enabled,
     float clip_height,
     float clip_direction) {
@@ -193,6 +199,9 @@ void TerrainRenderer::draw(const Terrain& terrain,
     uniform(shader_, "daylight", daylight);
     uniform(shader_, "fogColor", fog);
     uniform(shader_, "atmosphereOpacity", atmosphere_opacity);
+    glUniform1i(
+        glGetUniformLocation(shader_, "aircraftShadowEnabled"), aircraft_shadow_enabled);
+    uniform(shader_, "aircraftPosition", aircraft_position);
     if (clip_enabled) {
         uniform(shader_, "clipHeight", clip_height);
         uniform(shader_, "clipDirection", clip_direction);

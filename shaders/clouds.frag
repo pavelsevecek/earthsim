@@ -69,7 +69,7 @@ vec3 godRayScattering(vec3 ray, float rayLimit, float jitter) {
 
     const int steps = 12;
     float stride = leave / float(steps);
-    float g = 0.65;
+    float g = 0.15;
     float mu = clamp(dot(ray, sunDirection), -1.0, 1.0);
     float phase = (1.0 - g*g)
         / (12.5663706 * pow(max(1.0 + g*g - 2.0*g*mu, 0.001), 1.5));
@@ -89,7 +89,7 @@ vec3 godRayScattering(vec3 ray, float rayLimit, float jitter) {
         float localDensity = exp(-max(p.y, 0.0) / 1500.0);
         float stepTransmittance = exp(-stride * 0.0005 * atmosphereOpacity * localDensity);
         scattering += transmittance * (1.0 - stepTransmittance)
-            * cloudVisibility * phase * sunlight * sunColor * 50.0;
+            * cloudVisibility * phase * sunlight * sunColor * 40.0;
         transmittance *= stepTransmittance;
     }
     return scattering;
