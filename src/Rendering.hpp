@@ -195,7 +195,7 @@ public:
         Vec3 wind_direction,
         float cloud_base,
         float cloud_top,
-        float distance,
+        const Mat4& projection,
         GLuint destination);
     void draw_reflection(GLuint destination,
         GLuint scene_depth,
@@ -216,7 +216,7 @@ public:
         Vec3 wind_direction,
         float cloud_base,
         float cloud_top,
-        float distance);
+        const Mat4& projection);
 };
 
 class ExplosionClouds {
@@ -261,7 +261,7 @@ public:
         Vec3 sun,
         float daylight,
         float atmosphere_opacity,
-        float distance);
+        const Mat4& projection);
     bool active() const;
 };
 
@@ -287,7 +287,7 @@ public:
         Vec3 forward,
         Vec3 right,
         Vec3 up,
-        float distance);
+        const Mat4& projection);
 };
 
 class PlanarReflection {

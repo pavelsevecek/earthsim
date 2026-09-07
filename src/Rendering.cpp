@@ -945,7 +945,7 @@ void Clouds::draw(Vec3 eye,
     Vec3 wind_direction,
     float cloud_base,
     float cloud_top,
-    float distance,
+    const Mat4& projection,
     GLuint destination) {
     glBindFramebuffer(GL_FRAMEBUFFER, cloud_fbo_);
     glViewport(0, 0, (width_ + 1) / 2, (height_ + 1) / 2);
@@ -983,7 +983,6 @@ void Clouds::draw(Vec3 eye,
     uniform(shader_, "cloudTop", cloud_top);
     uniform(shader_, "aspect", float(width_) / height_);
     uniform(shader_, "tanHalfFov", std::tan(pi / 8));
-    Mat4 projection = perspective(float(width_) / height_, distance);
     glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindFramebuffer(GL_FRAMEBUFFER, destination);
@@ -1024,7 +1023,7 @@ void Clouds::draw_reflection(GLuint destination,
     Vec3 wind_direction,
     float cloud_base,
     float cloud_top,
-    float distance) {
+    const Mat4& projection) {
     glBindFramebuffer(GL_FRAMEBUFFER, destination);
     // Avoid sampling from an image while it is attached to the draw framebuffer.
     // Cloud depth testing is performed explicitly in the ray-march shader.
@@ -1065,7 +1064,6 @@ void Clouds::draw_reflection(GLuint destination,
     uniform(shader_, "cloudTop", cloud_top);
     uniform(shader_, "aspect", float(width) / height);
     uniform(shader_, "tanHalfFov", std::tan(pi / 8));
-    Mat4 projection = perspective(float(width) / height, distance);
     glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glFramebufferTexture2D(
@@ -1293,7 +1291,7 @@ void ExplosionClouds::draw(GLuint destination,
     Vec3 sun,
     float daylight,
     float atmosphere_opacity,
-    float distance) {
+    const Mat4& projection) {
     if (!active_)
         return;
     glBindFramebuffer(GL_FRAMEBUFFER, destination);
@@ -1332,7 +1330,6 @@ void ExplosionClouds::draw(GLuint destination,
     uniform(shader_, "strength", strength_);
     uniform(shader_, "aspect", float(width) / height);
     uniform(shader_, "tanHalfFov", std::tan(pi / 8));
-    Mat4 projection = perspective(float(width) / height, distance);
     glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glFramebufferTexture2D(
@@ -1391,7 +1388,7 @@ void ScreenSpaceGI::draw(GLuint scene_fbo,
     Vec3 forward,
     Vec3 right,
     Vec3 up,
-    float distance) {
+    const Mat4& projection) {
     resize(full_width, full_height);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
     glBindTexture(GL_TEXTURE_2D, emission);
@@ -1415,7 +1412,6 @@ void ScreenSpaceGI::draw(GLuint scene_fbo,
     uniform(shader_, "cameraUp", up);
     uniform(shader_, "aspect", float(full_width) / full_height);
     uniform(shader_, "tanHalfFov", std::tan(pi / 8));
-    Mat4 projection = perspective(float(full_width) / full_height, distance);
     glUniform2f(glGetUniformLocation(shader_, "depthProjection"), projection[10], projection[14]);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glBindFramebuffer(GL_FRAMEBUFFER, scene_fbo);

@@ -11,9 +11,13 @@ Mat4 multiply(const Mat4& a, const Mat4& b) {
 }
 
 Mat4 perspective(float aspect, float distance) {
-    float f = 1.0f / std::tan(pi / 8.0f);
     float near_plane = std::max(0.001f, distance * 0.0001f);
     float far_plane = std::max(6000.0f, distance + 4000.0f);
+    return perspective(aspect, near_plane, far_plane);
+}
+
+Mat4 perspective(float aspect, float near_plane, float far_plane) {
+    float f = 1.0f / std::tan(pi / 8.0f);
     return { f / aspect,
         0,
         0,

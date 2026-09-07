@@ -66,5 +66,6 @@ inline float smooth(float a, float b, float x) {
 using Mat4 = std::array<float, 16>;
 Mat4 multiply(const Mat4& a, const Mat4& b);
 Mat4 perspective(float aspect, float distance);
+Mat4 perspective(float aspect, float near_plane, float far_plane);
 Mat4 look_at(Vec3 eye, Vec3 forward, Vec3 right, Vec3 up);
 } // namespace earth_sim

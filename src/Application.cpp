@@ -141,7 +141,7 @@ class AppState {
     float camera_exposure_ = 0.0f;
     float bloom_intensity_ = 0.15f;
     bool clouds_enabled_ = true;
-    bool cloud_shadows_enabled_ = true;
+    bool cloud_shadows_enabled_ = false;
     bool cloud_simulation_enabled_ = true;
     bool explosion_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
@@ -537,8 +537,10 @@ void AppState::frame() {
         Vec3{ 0.012f, 0.019f, 0.040f } * (1 - daylight) + Vec3{ 0.42f, 0.59f, 0.72f } * daylight;
     float sunset = std::exp(-std::abs(sun.y) * 10) * 0.32f;
     fog = fog * (1 - sunset) + Vec3{ 0.70f, 0.23f, 0.09f } * sunset;
-    float camera_distance = flying_ ? 70.0f : distance_;
-    Mat4 projection = perspective(float(w) / float(h), camera_distance);
+    float near_plane = flying_ ? std::max(0.5f, flight_camera_distance_ * 0.01f)
+                               : std::max(0.001f, distance_ * 0.0001f);
+    float far_plane = flying_ ? 6000.0f : std::max(6000.0f, distance_ + 4000.0f);
+    Mat4 projection = perspective(float(w) / float(h), near_plane, far_plane);
     Mat4 vp = multiply(projection, look_at(eye, forward, right, up));
     if (particle_simulation_enabled_)
         rain_.update(elapsed,
@@ -571,8 +573,8 @@ void AppState::frame() {
     // Preserve horizontal screen orientation. The reflected basis is intentionally
     // mirrored; reflection rendering disables face culling below.
     Vec3 reflected_right{ right.x, -right.y, right.z };
-    Mat4 reflection_projection =
-        perspective(float(reflection_.width()) / float(reflection_.height()), camera_distance);
+    Mat4 reflection_projection = perspective(
+        float(reflection_.width()) / float(reflection_.height()), near_plane, far_plane);
     Mat4 reflection_vp = multiply(reflection_projection,
         look_at(reflected_eye, reflected_forward, reflected_right, reflected_up));
     glDisable(GL_DEPTH_TEST);
@@ -662,7 +664,7 @@ void AppState::frame() {
             wind_direction,
             cloud_base_,
             cloud_top,
-            camera_distance);
+            reflection_projection);
     glEnable(GL_CLIP_DISTANCE0);
     lightning_.draw(reflection_vp,
         reflected_eye,
@@ -835,7 +837,7 @@ void AppState::frame() {
             forward,
             right,
             up,
-            camera_distance);
+            projection);
     }
     explosions_.draw(clouds_.scene_framebuffer(),
         clouds_.scene_depth_texture(),
@@ -848,7 +850,7 @@ void AppState::frame() {
         sun,
         daylight,
         atmosphere_opacity_,
-        camera_distance);
+        projection);
     if (clouds_enabled_) {
         clouds_.draw(eye,
             forward,
@@ -865,7 +867,7 @@ void AppState::frame() {
             wind_direction,
             cloud_base_,
             cloud_top,
-            camera_distance,
+            projection,
             bloom_.hdr_framebuffer());
         glBindFramebuffer(GL_FRAMEBUFFER, bloom_.hdr_framebuffer());
         glFramebufferTexture2D(
