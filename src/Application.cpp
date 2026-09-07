@@ -142,7 +142,7 @@ class AppState {
     float bloom_intensity_ = 0.15f;
     bool clouds_enabled_ = true;
     bool cloud_shadows_enabled_ = false;
-    bool god_rays_enabled_ = true;
+    bool god_rays_enabled_ = false;
     bool cloud_simulation_enabled_ = true;
     bool explosion_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
@@ -367,7 +367,10 @@ void AppState::frame() {
             pitch = (ImGui::IsKeyDown(ImGuiKey_S) ? 1.0f : 0.0f) -
                     (ImGui::IsKeyDown(ImGuiKey_W) ? 1.0f : 0.0f);
         }
-        float dt = float(frame_elapsed);
+        // Advance the aircraft with simulation time so the global time-speed control
+        // affects flight, while keeping the chase camera responsive in real time.
+        float flight_dt = float(elapsed);
+        float camera_dt = float(frame_elapsed);
         auto rotate = [](Vec3 vector, Vec3 axis, float angle) {
             float cosine = std::cos(angle);
             float sine = std::sin(angle);
@@ -376,11 +379,13 @@ void AppState::frame() {
         };
         if (!aircraft_destroyed_) {
             aircraft_forward_ =
-                normalize(rotate(aircraft_forward_, aircraft_right_, pitch * 0.78f * dt));
-            aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_right_, pitch * 0.78f * dt));
+                normalize(rotate(aircraft_forward_, aircraft_right_, pitch * 0.78f * flight_dt));
+            aircraft_up_ =
+                normalize(rotate(aircraft_up_, aircraft_right_, pitch * 0.78f * flight_dt));
             aircraft_right_ =
-                normalize(rotate(aircraft_right_, aircraft_forward_, roll * 1.45f * dt));
-            aircraft_up_ = normalize(rotate(aircraft_up_, aircraft_forward_, roll * 1.45f * dt));
+                normalize(rotate(aircraft_right_, aircraft_forward_, roll * 1.45f * flight_dt));
+            aircraft_up_ =
+                normalize(rotate(aircraft_up_, aircraft_forward_, roll * 1.45f * flight_dt));
             aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
             aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
 
@@ -400,14 +405,14 @@ void AppState::frame() {
             Vec3 acceleration = aircraft_forward_ * ((95.0f - forward_speed) * 1.8f) -
                                 lateral_velocity * 1.25f + lift_direction * lift +
                                 Vec3{ 0, -22.0f, 0 };
-            aircraft_velocity_ = aircraft_velocity_ + acceleration * dt;
-            float alignment = 1.0f - std::exp(-0.9f * dt);
+            aircraft_velocity_ = aircraft_velocity_ + acceleration * flight_dt;
+            float alignment = 1.0f - std::exp(-0.9f * flight_dt);
             velocity_direction = normalize(aircraft_velocity_);
             aircraft_forward_ = normalize(aircraft_forward_ * (1.0f - alignment) +
                                           velocity_direction * alignment);
             aircraft_right_ = normalize(cross(aircraft_forward_, aircraft_up_));
             aircraft_up_ = normalize(cross(aircraft_right_, aircraft_forward_));
-            Vec3 next_position = aircraft_position_ + aircraft_velocity_ * dt;
+            Vec3 next_position = aircraft_position_ + aircraft_velocity_ * flight_dt;
             const Vec3 collision_points[] = { { 0, -0.75f, 0 },
                 { 0, 0, 9 },
                 { 0, 0, -7 },
@@ -450,7 +455,7 @@ void AppState::frame() {
             aircraft_position_ = next_position;
 
             if (!aircraft_destroyed_ && particle_simulation_enabled_) {
-                aircraft_vapor_emission_ += 100.0f * dt;
+                aircraft_vapor_emission_ += 100.0f * flight_dt;
                 size_t vapor_pairs = size_t(aircraft_vapor_emission_);
                 aircraft_vapor_emission_ -= float(vapor_pairs);
                 if (vapor_pairs > 0)
@@ -465,12 +470,12 @@ void AppState::frame() {
         const Vec3 world_up{ 0, 1, 0 };
         Vec3 desired_offset = aircraft_forward_ * -52.0f + world_up * 18.0f;
         desired_offset = normalize(desired_offset) * flight_camera_distance_;
-        float rotation_blend = 1.0f - std::exp(-1.6f * dt);
+        float rotation_blend = 1.0f - std::exp(-1.6f * camera_dt);
         flight_camera_offset_ =
             normalize(flight_camera_offset_ * (1.0f - rotation_blend) +
                       desired_offset * rotation_blend) *
             flight_camera_distance_;
-        float position_blend = 1.0f - std::exp(-4.0f * dt);
+        float position_blend = 1.0f - std::exp(-4.0f * camera_dt);
         flight_camera_center_ = flight_camera_center_ +
                                 (aircraft_position_ - flight_camera_center_) * position_blend;
 

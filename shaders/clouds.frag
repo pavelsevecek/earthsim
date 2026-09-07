@@ -86,8 +86,8 @@ vec3 godRayScattering(vec3 ray, float rayLimit, float jitter) {
         // this air sample down the sunlight ray to the same approximate footprint.
         vec2 receiver = p.xz - sunDirection.xz * p.y / max(sunDirection.y, 0.03);
         float cloudVisibility = texture(cloudShadowMap, receiver / 2000.0 + 0.5).r;
-        float localDensity = exp(-max(p.y, 0.0) / 500.0);
-        float stepTransmittance = exp(-stride * 0.001 * atmosphereOpacity * localDensity);
+        float localDensity = exp(-max(p.y, 0.0) / 1500.0);
+        float stepTransmittance = exp(-stride * 0.0005 * atmosphereOpacity * localDensity);
         scattering += transmittance * (1.0 - stepTransmittance)
             * cloudVisibility * phase * sunlight * sunColor * 50.0;
         transmittance *= stepTransmittance;
