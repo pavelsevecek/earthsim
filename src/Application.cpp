@@ -142,6 +142,7 @@ class AppState {
     float bloom_intensity_ = 0.15f;
     bool clouds_enabled_ = true;
     bool cloud_shadows_enabled_ = false;
+    bool god_rays_enabled_ = true;
     bool cloud_simulation_enabled_ = true;
     bool explosion_simulation_enabled_ = true;
     bool particle_simulation_enabled_ = true;
@@ -584,7 +585,7 @@ void AppState::frame() {
         cloud_coverage_,
         cloud_base_,
         cloud_top,
-        clouds_enabled_ && cloud_shadows_enabled_);
+        clouds_enabled_ && (cloud_shadows_enabled_ || god_rays_enabled_));
     reflection_.begin(w, h);
     Vec3 reflected_eye{ eye.x, 2.0f * water_level_ - eye.y, eye.z };
     Vec3 reflected_forward{ forward.x, -forward.y, forward.z };
@@ -615,6 +616,7 @@ void AppState::frame() {
         rain_,
         volcanoes_.scorched_texture(),
         clouds_.shadow_texture(),
+        cloud_shadows_enabled_,
         reflection_vp,
         reflected_eye,
         sun,
@@ -719,6 +721,7 @@ void AppState::frame() {
         rain_,
         volcanoes_.scorched_texture(),
         clouds_.shadow_texture(),
+        cloud_shadows_enabled_,
         vp,
         eye,
         sun,
@@ -819,6 +822,7 @@ void AppState::frame() {
         reflection_.color_texture(),
         volcanoes_.terrain_texture(),
         clouds_.shadow_texture(),
+        cloud_shadows_enabled_,
         eye,
         sun,
         fog,
@@ -886,6 +890,7 @@ void AppState::frame() {
             wind_direction,
             cloud_base_,
             cloud_top,
+            god_rays_enabled_,
             projection,
             bloom_.hdr_framebuffer());
         glBindFramebuffer(GL_FRAMEBUFFER, bloom_.hdr_framebuffer());
@@ -1220,6 +1225,7 @@ void AppState::frame() {
         rain_.set_intensity(rain_intensity);
     ImGui::Checkbox("Clouds", &clouds_enabled_);
     ImGui::Checkbox("Cloud shadows", &cloud_shadows_enabled_);
+    ImGui::Checkbox("God rays", &god_rays_enabled_);
     if (flying_)
         ImGui::BeginDisabled();
     ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);

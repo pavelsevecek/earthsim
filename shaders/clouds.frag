@@ -2,6 +2,7 @@
 in vec2 uv;
 out vec4 fragColor;
 uniform sampler2D sceneDepth;
+uniform sampler2D cloudShadowMap;
 uniform sampler3D noiseTexture;
 uniform sampler3D cloudDensityTexture;
 uniform vec2 depthProjection;
@@ -10,6 +11,7 @@ uniform vec3 sunDirection, fogColor;
 uniform float aspect, tanHalfFov, daylight, atmosphereOpacity, cloudOpacity, time, cloudCoverage;
 uniform float windSpeed, cloudBase, cloudTop;
 uniform vec2 windDirection;
+uniform bool godRaysEnabled;
 vec3 boxMin() { return vec3(-2200.0, cloudBase, -2200.0); }
 vec3 boxMax() { return vec3(2200.0, cloudTop, 2200.0); }
 
@@ -51,22 +53,68 @@ bool intersectVolume(vec3 ray, out float entry, out float leave) {
     }
     return leave > entry;
 }
+
+vec3 godRayScattering(vec3 ray, float rayLimit, float jitter) {
+    if(!godRaysEnabled || sunDirection.y <= 0.03 || daylight <= 0.01)
+        return vec3(0.0);
+
+    float fadeDistance = max(0.5 * (cloudTop - cloudBase), 1.0);
+    float heightFade = 1.0 - smoothstep(cloudTop - fadeDistance, cloudTop, eye.y);
+    if(heightFade <= 0.0) return vec3(0.0);
+
+    float leave = min(rayLimit, 3500.0);
+    if(ray.y > 0.0001)
+        leave = min(leave, (cloudBase - eye.y) / ray.y);
+    if(leave <= 0.0) return vec3(0.0);
+
+    const int steps = 12;
+    float stride = leave / float(steps);
+    float g = 0.65;
+    float mu = clamp(dot(ray, sunDirection), -1.0, 1.0);
+    float phase = (1.0 - g*g)
+        / (12.5663706 * pow(max(1.0 + g*g - 2.0*g*mu, 0.001), 1.5));
+    float sunlight = smoothstep(0.03, 0.18, sunDirection.y) * daylight * heightFade;
+    vec3 sunColor = mix(vec3(1.0, 0.36, 0.13), vec3(1.0, 0.96, 0.88),
+        smoothstep(0.0, 0.4, sunDirection.y));
+    vec3 scattering = vec3(0.0);
+    float transmittance = 1.0;
+    for(int i = 0; i < steps; ++i) {
+        float t = (float(i) + jitter) * stride;
+        vec3 p = eye + ray * t;
+
+        // The shadow texture describes visibility at ground receivers. Project
+        // this air sample down the sunlight ray to the same approximate footprint.
+        vec2 receiver = p.xz - sunDirection.xz * p.y / max(sunDirection.y, 0.03);
+        float cloudVisibility = texture(cloudShadowMap, receiver / 2000.0 + 0.5).r;
+        float localDensity = exp(-max(p.y, 0.0) / 500.0);
+        float stepTransmittance = exp(-stride * 0.001 * atmosphereOpacity * localDensity);
+        scattering += transmittance * (1.0 - stepTransmittance)
+            * cloudVisibility * phase * sunlight * sunColor * 50.0;
+        transmittance *= stepTransmittance;
+    }
+    return scattering;
+}
+
 void main() {
     fragColor = vec4(0.0);
     if(cloudOpacity <= 0.0 || cloudCoverage <= 0.0001) return;
     vec2 screen = uv * 2.0 - 1.0;
     vec3 ray = normalize(cameraForward + tanHalfFov * (screen.x * aspect * cameraRight + screen.y * cameraUp));
-    float entry, leave;
-    if(!intersectVolume(ray, entry, leave)) return;
     float depth = texture(sceneDepth, uv).r;
+    float rayLimit = 1e20;
     if(depth < 1.0) {
         float viewDistance = depthProjection.y / (depth * 2.0 - 1.0 + depthProjection.x);
-        leave = min(leave, viewDistance / max(dot(ray, cameraForward), 0.0001));
+        rayLimit = viewDistance / max(dot(ray, cameraForward), 0.0001);
     }
-    if(leave <= entry) return;
-    float stride = (leave - entry) / 64.0;
     // Stable spatial jitter avoids coherent ray-march bands without temporal flicker.
     float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec3 airScattering = godRayScattering(ray, rayLimit, jitter);
+    fragColor = vec4(airScattering, 0.0);
+    float entry, leave;
+    if(!intersectVolume(ray, entry, leave)) return;
+    leave = min(leave, rayLimit);
+    if(leave <= entry) return;
+    float stride = (leave - entry) / 64.0;
     vec3 lightDirection = daylight > 0.1 ? sunDirection : -sunDirection;
     vec3 lightColor = mix(vec3(0.10, 0.14, 0.24), mix(vec3(1.0, 0.36, 0.13), vec3(1.0, 0.96, 0.88), smoothstep(0.0, 0.4, sunDirection.y)), daylight);
     vec3 ambient = mix(vec3(0.012, 0.02, 0.045), vec3(0.26, 0.34, 0.44), daylight);
@@ -88,5 +136,5 @@ void main() {
         transmittance *= 1.0 - alpha;
         if(transmittance < 0.01) break;
     }
-    fragColor = vec4(scattering, 1.0 - transmittance);
+    fragColor = vec4(airScattering + scattering, 1.0 - transmittance);
 }

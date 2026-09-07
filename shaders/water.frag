@@ -11,6 +11,7 @@ uniform float time;
 uniform sampler2D reflectionTexture;
 uniform sampler2D terrainHeight;
 uniform sampler2D cloudShadowMap;
+uniform bool cloudShadowsEnabled;
 uniform mat4 reflectionViewProjection;
 uniform float waterLevel;
 out vec4 fragColor;
@@ -69,7 +70,8 @@ void main() {
     bool viewedFromAir=directionToEye.y>=0.0;
     float facing=abs(dot(normal,directionToEye));
     float fresnel=dielectricFresnel(facing,viewedFromAir?1.0:1.333,viewedFromAir?1.333:1.0);
-    float cloudVisibility=texture(cloudShadowMap,worldPosition.xz/2000.0+0.5).r;
+    float cloudVisibility=cloudShadowsEnabled
+        ? texture(cloudShadowMap,worldPosition.xz/2000.0+0.5).r : 1.0;
     float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*daylight*cloudVisibility;
     vec3 reflectedRadiance=reflectedColor+vec3(1.0,0.88,0.62)*sunGlint*2.5;
     // Approximate a deep water column. Fresnel accounts for interface reflection;

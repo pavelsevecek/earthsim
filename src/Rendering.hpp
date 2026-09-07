@@ -53,6 +53,7 @@ public:
         const Rain& rain,
         GLuint scorched_texture,
         GLuint cloud_shadow_texture,
+        bool cloud_shadows_enabled,
         const Mat4& vp,
         Vec3 eye,
         Vec3 sun,
@@ -92,6 +93,7 @@ public:
         GLuint reflection_texture,
         GLuint terrain_height_texture,
         GLuint cloud_shadow_texture,
+        bool cloud_shadows_enabled,
         Vec3 eye,
         Vec3 sun,
         Vec3 fog,
@@ -195,6 +197,7 @@ public:
         Vec3 wind_direction,
         float cloud_base,
         float cloud_top,
+        bool god_rays_enabled,
         const Mat4& projection,
         GLuint destination);
     void draw_reflection(GLuint destination,

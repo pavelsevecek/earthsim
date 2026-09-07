@@ -176,6 +176,7 @@ void TerrainRenderer::draw(const Terrain& terrain,
     const Rain& rain,
     GLuint scorched_texture,
     GLuint cloud_shadow_texture,
+    bool cloud_shadows_enabled,
     const Mat4& vp,
     Vec3 eye,
     Vec3 sun,
@@ -203,6 +204,7 @@ void TerrainRenderer::draw(const Terrain& terrain,
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, cloud_shadow_texture);
     glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 5);
+    glUniform1i(glGetUniformLocation(shader_, "cloudShadowsEnabled"), cloud_shadows_enabled);
     glActiveTexture(GL_TEXTURE0);
     shadows.bind(shader_);
     terrain.draw();
@@ -323,6 +325,7 @@ void WaterRenderer::draw(const Mat4& vp,
     GLuint reflection_texture,
     GLuint terrain_height_texture,
     GLuint cloud_shadow_texture,
+    bool cloud_shadows_enabled,
     Vec3 eye,
     Vec3 sun,
     Vec3 fog,
@@ -353,6 +356,7 @@ void WaterRenderer::draw(const Mat4& vp,
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, cloud_shadow_texture);
     glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 5);
+    glUniform1i(glGetUniformLocation(shader_, "cloudShadowsEnabled"), cloud_shadows_enabled);
     glUniformMatrix4fv(glGetUniformLocation(shader_, "reflectionViewProjection"),
         1,
         GL_FALSE,
@@ -945,6 +949,7 @@ void Clouds::draw(Vec3 eye,
     Vec3 wind_direction,
     float cloud_base,
     float cloud_top,
+    bool god_rays_enabled,
     const Mat4& projection,
     GLuint destination) {
     glBindFramebuffer(GL_FRAMEBUFFER, cloud_fbo_);
@@ -964,6 +969,11 @@ void Clouds::draw(Vec3 eye,
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_3D, density_texture());
     glUniform1i(glGetUniformLocation(shader_, "cloudDensityTexture"), 2);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, shadow_texture_);
+    glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 3);
+    glUniform1i(
+        glGetUniformLocation(shader_, "godRaysEnabled"), god_rays_enabled ? 1 : 0);
     uniform(shader_, "eye", eye);
     uniform(shader_, "cameraForward", forward);
     uniform(shader_, "cameraRight", right);
@@ -1046,6 +1056,7 @@ void Clouds::draw_reflection(GLuint destination,
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_3D, density_texture());
     glUniform1i(glGetUniformLocation(shader_, "cloudDensityTexture"), 2);
+    glUniform1i(glGetUniformLocation(shader_, "godRaysEnabled"), 0);
     uniform(shader_, "eye", eye);
     uniform(shader_, "cameraForward", forward);
     uniform(shader_, "cameraRight", right);
