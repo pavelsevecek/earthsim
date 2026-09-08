@@ -9,7 +9,7 @@ in float vaporFactor;
 in float trailFactor;
 in vec3 directionToEye;
 in vec4 shadowPosition;
-in vec3 particleCenter;
+in vec3 reflectionPosition;
 uniform float atmosphereOpacity;
 uniform float particleBrightness;
 uniform bool opaquePass;
@@ -61,21 +61,27 @@ void main() {
         float shadowVisibility=sunVisibility();
         float localDaylight=daylight*shadowVisibility;
         vec3 normal=vec3(0.0,1.0,0.0);
-        vec3 reflection=reflect(-directionToEye,normal);
+        vec3 viewDirection=directionToEye/max(length(directionToEye),0.0001);
+        vec3 reflection=reflect(-viewDirection,normal);
         float skyHeight=smoothstep(-0.15,0.85,reflection.y);
         vec3 reflectedSky=mix(vec3(0.34,0.52,0.72),vec3(0.055,0.24,0.62),skyHeight)*localDaylight;
         if(!reflectionCapture) {
-            vec4 reflectedClip=reflectionViewProjection*vec4(particleCenter,1.0);
+            // Approximate reflected scenery at a fixed distance, allowing elevated
+            // particles to use the ocean capture with an approximate parallax shift.
+            const float proxyDistance=600.0;
+            vec3 reflectedTarget=reflectionPosition+reflection*proxyDistance;
+            vec4 reflectedClip=reflectionViewProjection*vec4(reflectedTarget,1.0);
             vec2 reflectionUv=reflectedClip.xy/max(abs(reflectedClip.w),0.0001)*0.5+0.5;
-            vec2 ripple=vec2(sin(particleCenter.x*0.045+time*0.7),cos(particleCenter.z*0.052+time*0.58))*0.0025;
+            vec2 ripple=vec2(sin(reflectionPosition.x*0.045+time*0.7),cos(reflectionPosition.z*0.052+time*0.58))*0.0025;
+            reflectionUv+=ripple;
             float edge=min(min(reflectionUv.x,reflectionUv.y),min(1.0-reflectionUv.x,1.0-reflectionUv.y));
             float reflectionLighting=mix(1.0,shadowVisibility,daylight);
             float inside=smoothstep(0.0,0.025,edge)*step(0.0001,reflectedClip.w)*reflectionLighting;
-            vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv+ripple,vec2(0.001),vec2(0.999))).rgb;
+            vec3 planarReflection=texture(reflectionTexture,clamp(reflectionUv,vec2(0.001),vec2(0.999))).rgb;
             reflectedSky=mix(reflectedSky,planarReflection,inside);
         }
-        bool viewedFromAir=directionToEye.y>=0.0;
-        float facing=abs(dot(normal,directionToEye));
+        bool viewedFromAir=viewDirection.y>=0.0;
+        float facing=abs(dot(normal,viewDirection));
         float fresnel=dielectricFresnel(facing,viewedFromAir?1.0:1.333,viewedFromAir?1.333:1.0);
         float sunGlint=pow(max(dot(reflection,sunDirection),0.0),180.0)*localDaylight;
         vec3 reflectedRadiance=reflectedSky+vec3(1.0,0.88,0.62)*sunGlint*2.5;

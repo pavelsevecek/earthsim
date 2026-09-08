@@ -26,7 +26,7 @@ out float vaporFactor;
 out float trailFactor;
 out vec3 directionToEye;
 out vec4 shadowPosition;
-out vec3 particleCenter;
+out vec3 reflectionPosition;
 void main() {
     gl_ClipDistance[0]=1.0;
     const vec2 corners[6] = vec2[6](vec2(-1,-1), vec2(1,-1), vec2(1,1), vec2(-1,-1), vec2(1,1), vec2(-1,1));
@@ -77,9 +77,11 @@ void main() {
         }
     }
     distanceToEye = length(center - eye);
-    particleCenter=center;
-    directionToEye=normalize(eye-center);
     vec3 world = center + (cameraRight * local.x + cameraUp * local.y) * size * 0.5;
+    // Project the billboard corners onto the horizontal plane through its center.
+    // Interpolation gives each fragment its own finite-particle reflection position.
+    reflectionPosition=vec3(world.x,center.y,world.z);
+    directionToEye=eye-reflectionPosition;
     gl_ClipDistance[0]=clipEnabled?(world.y-clipHeight)*clipDirection:1.0;
     shadowPosition=lightViewProjection*vec4(world,1.0);
     gl_Position = viewProjection * vec4(world, 1.0);

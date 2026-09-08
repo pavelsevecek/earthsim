@@ -806,11 +806,19 @@ void AppState::frame() {
             aircraft_up_,
             sun,
             daylight);
+    bool impact_preview = placement_ == PlacementTool::Meteor ||
+        placement_ == PlacementTool::Explosion;
+    float preview_radius = brush_radius_;
+    if (placement_ == PlacementTool::Meteor)
+        preview_radius = Volcanoes::meteor_radius(meteor_size_);
+    else if (placement_ == PlacementTool::Explosion)
+        preview_radius = Volcanoes::impact_radius(explosion_size_ * explosion_size_scale_);
+    ImU32 preview_color = impact_preview ? IM_COL32(255, 150, 35, 255) : IM_COL32_WHITE;
     bool brush_preview = !flying_ && !io.WantCaptureMouse &&
         (placement_ == PlacementTool::TerrainUp || placement_ == PlacementTool::TerrainDown ||
             placement_ == PlacementTool::FlattenTerrain ||
             placement_ == PlacementTool::RoughenTerrain || placement_ == PlacementTool::AddWater ||
-            placement_ == PlacementTool::AddLava);
+            placement_ == PlacementTool::AddLava || impact_preview);
     bool brush_hit = false;
     Vec3 brush_center{};
     if (place_click || target_click || brush_preview) {
@@ -1022,7 +1030,7 @@ void AppState::frame() {
         for (int i = 0; i <= segments; ++i) {
             float angle = 2.0f * pi * float(i % segments) / float(segments);
             Vec3 point = brush_center +
-                Vec3{ std::cos(angle) * brush_radius_, 0, std::sin(angle) * brush_radius_ };
+                Vec3{ std::cos(angle) * preview_radius, 0, std::sin(angle) * preview_radius };
             ImVec2 screen{};
             bool visible = false;
             if (point.x >= -1000.0f && point.x <= 1000.0f &&
@@ -1033,7 +1041,7 @@ void AppState::frame() {
                     point, eye, forward, right, up, io.DisplaySize, screen);
             }
             if (visible && previous_visible)
-                preview->AddLine(previous_screen, screen, IM_COL32_WHITE, 1.5f * ui_scale);
+                preview->AddLine(previous_screen, screen, preview_color, 1.5f * ui_scale);
             previous_screen = screen;
             previous_visible = visible;
         }

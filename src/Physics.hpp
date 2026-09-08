@@ -160,6 +160,8 @@ public:
     void set_particle_interactions(bool enabled);
     void add_water(const Terrain& terrain, Vec3 center, float radius, float spacing);
     void add_lava(const Terrain& terrain, Vec3 center, float radius, float spacing);
+    static float meteor_radius(float size_scale) { return 4.0f * size_scale; }
+    static float impact_radius(float size_scale) { return 65.0f * size_scale; }
     void impact(Terrain& terrain, Vec3 position, float size_scale);
     void water_impact(Vec3 position, float size_scale);
     void explosion_water_impact(Vec3 position, float size_scale);

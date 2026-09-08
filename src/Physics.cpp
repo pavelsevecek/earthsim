@@ -662,7 +662,7 @@ void Volcanoes::add_lava(const Terrain& terrain, Vec3 center, float radius, floa
 
 void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
     impact_strengths_.push_back(size_scale);
-    terrain.carve_crater(position, 65.0f * size_scale);
+    terrain.carve_crater(position, impact_radius(size_scale));
     constexpr size_t ejecta_count = 1200;
     std::vector<GpuParticle> records;
     records.reserve(ejecta_count);
@@ -1035,7 +1035,7 @@ void Volcanoes::draw(const Mat4& vp,
     for (Vec3 vent : vents_)
         sprites_.push_back({ vent + Vec3{ 0, 3.0f, 0 }, 5, 1, glow(1600) });
     for (const auto& meteor : meteors_)
-        sprites_.push_back({ meteor.position, 8 * meteor.size_scale, 1, glow(1800) * 3 });
+        sprites_.push_back({ meteor.position, 2 * meteor_radius(meteor.size_scale), 1, glow(1800) * 3 });
     if (!sprites_.empty()) {
         glBufferData(GL_ARRAY_BUFFER,
             GLsizeiptr(sprites_.size() * sizeof(Sprite)),
