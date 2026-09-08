@@ -806,8 +806,15 @@ void AppState::frame() {
             aircraft_up_,
             sun,
             daylight);
-    if (place_click || target_click) {
-        // Read only for a surface action, before particles/clouds/UI are drawn.
+    bool brush_preview = !flying_ && !io.WantCaptureMouse &&
+        (placement_ == PlacementTool::TerrainUp || placement_ == PlacementTool::TerrainDown ||
+            placement_ == PlacementTool::FlattenTerrain ||
+            placement_ == PlacementTool::RoughenTerrain || placement_ == PlacementTool::AddWater ||
+            placement_ == PlacementTool::AddLava);
+    bool brush_hit = false;
+    Vec3 brush_center{};
+    if (place_click || target_click || brush_preview) {
+        // Pick the surface for actions and the brush preview, before particles/clouds/UI.
         // The scene depth selects the visible triangle, including mountain occlusion.
         int px = int(std::floor(io.MousePos.x * float(w) / io.DisplaySize.x));
         int py = h - 1 - int(std::floor(io.MousePos.y * float(h) / io.DisplaySize.y));
@@ -827,9 +834,15 @@ void AppState::frame() {
                 position.z = std::clamp(position.z, -1000.0f, 1000.0f);
                 Vec3 normal;
                 position.y = terrain_.surface(position.x, position.z, normal);
+                if (brush_preview) {
+                    brush_hit = true;
+                    brush_center = position;
+                }
                 if (target_click)
                     target_ = position;
-                else if (placement_ == PlacementTool::TerrainUp ||
+                else if (!place_click) {
+                    // Hovering previews the brush without applying the selected tool.
+                } else if (placement_ == PlacementTool::TerrainUp ||
                          placement_ == PlacementTool::TerrainDown ||
                          placement_ == PlacementTool::FlattenTerrain ||
                          placement_ == PlacementTool::RoughenTerrain) {
@@ -1000,6 +1013,31 @@ void AppState::frame() {
         bloom_intensity_,
         framebuffer_width,
         framebuffer_height);
+
+    if (brush_hit) {
+        ImDrawList* preview = ImGui::GetBackgroundDrawList();
+        constexpr int segments = 256;
+        ImVec2 previous_screen{};
+        bool previous_visible = false;
+        for (int i = 0; i <= segments; ++i) {
+            float angle = 2.0f * pi * float(i % segments) / float(segments);
+            Vec3 point = brush_center +
+                Vec3{ std::cos(angle) * brush_radius_, 0, std::sin(angle) * brush_radius_ };
+            ImVec2 screen{};
+            bool visible = false;
+            if (point.x >= -1000.0f && point.x <= 1000.0f &&
+                point.z >= -1000.0f && point.z <= 1000.0f) {
+                Vec3 normal;
+                point.y = terrain_.surface(point.x, point.z, normal);
+                visible = world_to_screen(
+                    point, eye, forward, right, up, io.DisplaySize, screen);
+            }
+            if (visible && previous_visible)
+                preview->AddLine(previous_screen, screen, IM_COL32_WHITE, 1.5f * ui_scale);
+            previous_screen = screen;
+            previous_visible = visible;
+        }
+    }
 
     if (!flying_ && source_icons_visible_) {
         ImDrawList* source_icons = ImGui::GetBackgroundDrawList();
