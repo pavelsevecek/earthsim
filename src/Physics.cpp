@@ -663,7 +663,6 @@ void Volcanoes::add_lava(const Terrain& terrain, Vec3 center, float radius, floa
 void Volcanoes::impact(Terrain& terrain, Vec3 position, float size_scale) {
     impact_strengths_.push_back(size_scale);
     terrain.carve_crater(position, 65.0f * size_scale);
-    terrain_changed(terrain);
     constexpr size_t ejecta_count = 1200;
     std::vector<GpuParticle> records;
     records.reserve(ejecta_count);
@@ -763,7 +762,8 @@ void Volcanoes::update(Terrain& terrain,
     while (gpu_.consume_erosion_readback(erosion_delta))
         terrain_eroded |=
             terrain.apply_height_deltas(erosion_delta, 1.0f / GpuSimulation::terrain_delta_scale_);
-    if (terrain_eroded)
+    bool crater_changed = terrain.update_craters(elapsed);
+    if (terrain_eroded || crater_changed)
         terrain_changed(terrain);
 
     if (meteor_frequency_ != scheduled_meteor_frequency_) {

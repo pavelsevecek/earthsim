@@ -13,6 +13,16 @@ class Terrain {
         Vec3 position;
         Vec3 normal;
     };
+    struct CraterSample {
+        size_t index;
+        float initial_height;
+        float target_height;
+    };
+    struct Crater {
+        std::vector<CraterSample> samples;
+        double age = 0;
+    };
+    std::vector<Crater> craters_;
     static constexpr int cells_ = 512;
     static constexpr float step_ = 2000.0f / cells_;
     std::vector<float> heights_;
@@ -37,6 +47,7 @@ public:
     void flatten(Vec3 center, float radius, float magnitude);
     void roughen(Vec3 center, float radius, float magnitude);
     void carve_crater(Vec3 center, float radius);
+    bool update_craters(double elapsed);
     bool segment_hit(Vec3 start, Vec3 end, Vec3& hit) const;
     void draw() const;
     // Sample the actual mesh triangles, not the higher-frequency noise surface.

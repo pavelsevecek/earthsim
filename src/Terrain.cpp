@@ -100,6 +100,7 @@ uint32_t random_terrain_seed() {
 
 
 void Terrain::generate(uint32_t seed) {
+    craters_.clear();
     terrain_seed = seed;
     generate_mountain_ranges(terrain_seed);
     heights_.clear();
@@ -275,6 +276,9 @@ void Terrain::roughen(Vec3 center, float radius, float magnitude) {
 }
 
 void Terrain::carve_crater(Vec3 center, float radius) {
+    if (radius <= 0)
+        return;
+    Crater crater;
     for (size_t i = 0; i < vertices_.size(); ++i) {
         Vec3 p = vertices_[i].position;
         float r = std::hypot(p.x - center.x, p.z - center.z);
@@ -288,9 +292,38 @@ void Terrain::carve_crater(Vec3 center, float radius) {
             r < radius
                 ? sphere_center_y - std::sqrt(std::max(0.0f, sphere_radius * sphere_radius - r * r))
                 : mix(center.y, heights_[i], smooth(radius, radius * 1.25f, r));
-        heights_[i] = std::min(heights_[i], bowl);
+        if (bowl < heights_[i])
+            crater.samples.push_back({ i, heights_[i], bowl });
     }
-    update_geometry();
+    if (!crater.samples.empty())
+        craters_.push_back(std::move(crater));
+}
+
+bool Terrain::update_craters(double elapsed) {
+    if (elapsed <= 0 || craters_.empty())
+        return false;
+    constexpr double duration = 0.5;
+    bool changed = false;
+    for (auto& crater : craters_) {
+        crater.age = std::min(crater.age + elapsed, duration);
+        float progress = float(crater.age / duration);
+        progress = progress * progress * (3.0f - 2.0f * progress);
+        for (const auto& sample : crater.samples) {
+            // Overlapping craters must never raise already excavated ground.
+            float height = progress == 1.0f ? sample.target_height :
+                mix(sample.initial_height, sample.target_height, progress);
+            if (height < heights_[sample.index]) {
+                heights_[sample.index] = height;
+                changed = true;
+            }
+        }
+    }
+    craters_.erase(std::remove_if(craters_.begin(), craters_.end(),
+                       [&](const Crater& crater) { return crater.age >= duration; }),
+        craters_.end());
+    if (changed)
+        update_geometry();
+    return changed;
 }
 
 bool Terrain::segment_hit(Vec3 start, Vec3 end, Vec3& hit) const {
