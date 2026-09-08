@@ -179,6 +179,9 @@ class AppState {
     Vec3 target_{ 0, 50, 0 };
     bool panning_ = false;
     bool rotating_ = false;
+    Vec3 camera_rotation_pending_{};
+    Vec3 camera_pan_pending_{};
+    float camera_zoom_pending_ = 0.0f;
     enum class PlacementTool {
         None,
         Volcano,
@@ -327,24 +330,55 @@ void AppState::frame() {
         panning_ = false;
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right) || !focused)
         rotating_ = false;
-    if (rotating_) {
-        if (flying_) {
-            flight_camera_yaw_offset_ =
-                std::remainder(flight_camera_yaw_offset_ - io.MouseDelta.x * 0.005f, 2 * pi);
-            flight_camera_pitch_offset_ =
-                std::remainder(flight_camera_pitch_offset_ - io.MouseDelta.y * 0.005f, 2 * pi);
-        } else {
-            yaw_ = std::remainder(yaw_ - io.MouseDelta.x * 0.005f, 2 * pi);
-            pitch_ = std::remainder(pitch_ + io.MouseDelta.y * 0.005f, 2 * pi);
-        }
+    if (!focused || target_click) {
+        camera_rotation_pending_ = {};
+        camera_pan_pending_ = {};
+        camera_zoom_pending_ = 0.0f;
     }
-    if (!io.WantCaptureMouse) {
+    // Integrate an exponential input filter in real time. Pending displacement
+    // gives a short coast even when the mouse stops while a button is held,
+    // without increasing the total drag distance or wheel zoom.
+    constexpr float camera_smoothing_time = 0.075f;
+    float camera_dt = float(frame_elapsed);
+    float camera_blend = -std::expm1(-camera_dt / camera_smoothing_time);
+    auto smooth_motion = [&](float input, float& pending) {
+        if (camera_dt <= 0.0f) {
+            pending += input;
+            return 0.0f;
+        }
+        float motion = input +
+                       (pending - input * camera_smoothing_time / camera_dt) * camera_blend;
+        pending += input - motion;
+        if (input == 0.0f && std::abs(pending) < 0.0001f) {
+            motion += pending;
+            pending = 0.0f;
+        }
+        return motion;
+    };
+    bool accept_rotation = rotating_ && !target_click;
+    float rotation_x = smooth_motion(
+        accept_rotation ? io.MouseDelta.x : 0.0f, camera_rotation_pending_.x);
+    float rotation_y = smooth_motion(
+        accept_rotation ? io.MouseDelta.y : 0.0f, camera_rotation_pending_.y);
+    float zoom = smooth_motion(
+        focused && !io.WantCaptureMouse && !target_click ? io.MouseWheel : 0.0f,
+        camera_zoom_pending_);
+    if (flying_) {
+        flight_camera_yaw_offset_ =
+            std::remainder(flight_camera_yaw_offset_ - rotation_x * 0.005f, 2 * pi);
+        flight_camera_pitch_offset_ =
+            std::remainder(flight_camera_pitch_offset_ - rotation_y * 0.005f, 2 * pi);
+    } else {
+        yaw_ = std::remainder(yaw_ - rotation_x * 0.005f, 2 * pi);
+        pitch_ = std::remainder(pitch_ + rotation_y * 0.005f, 2 * pi);
+    }
+    if (zoom != 0.0f) {
         if (flying_) {
-            float zoomed = flight_camera_distance_ * std::exp(-io.MouseWheel * 0.12f);
+            float zoomed = flight_camera_distance_ * std::exp(-zoom * 0.12f);
             if (std::isfinite(zoomed))
                 flight_camera_distance_ = std::clamp(zoomed, 14.0f, 500.0f);
         } else {
-            float zoomed = distance_ * std::exp(-io.MouseWheel * 0.12f);
+            float zoomed = distance_ * std::exp(-zoom * 0.12f);
             // Reject only floating-point overflow/underflow, with no distance limits.
             if (std::isfinite(zoomed) && zoomed > 0)
                 distance_ = zoomed;
@@ -357,13 +391,36 @@ void AppState::frame() {
     Vec3 forward = orbit * (-1);
     Vec3 right{ std::cos(yaw_), 0, -std::sin(yaw_) };
     Vec3 up = cross(right, forward);
-    if (!flying_ && panning_) {
+    if (!flying_) {
         // Match screen-space dragging at the orbit target, including on HiDPI displays.
         float units_per_pixel = 2 * distance_ * std::tan(pi / 8) / std::max(io.DisplaySize.y, 1.0f);
-        target_ = target_ + right * (-io.MouseDelta.x * units_per_pixel) +
-                  up * (io.MouseDelta.y * units_per_pixel);
+        Vec3 pan_input = panning_ ? right * (-io.MouseDelta.x * units_per_pixel) +
+                                       up * (io.MouseDelta.y * units_per_pixel)
+                                 : Vec3{};
+        target_ = target_ + Vec3{ smooth_motion(pan_input.x, camera_pan_pending_.x),
+                                smooth_motion(pan_input.y, camera_pan_pending_.y),
+                                smooth_motion(pan_input.z, camera_pan_pending_.z) };
     }
-    Vec3 eye = target_ + orbit * distance_;
+    // Shorten the orbit arm at the ocean surface, retaining the requested zoom
+    // so it returns naturally when the user rotates away from the water.
+    constexpr float ocean_camera_clearance = 1.0f;
+    float camera_floor = water_level_ + ocean_camera_clearance;
+    auto ocean_safe_offset = [&](Vec3 pivot, Vec3 offset) {
+        if (offset.y < 0.0f) {
+            float fraction = std::clamp((pivot.y - camera_floor) / -offset.y, 0.0f, 1.0f);
+            offset = offset * fraction;
+        }
+        return offset;
+    };
+    // A submerged focus cannot be made safe by zooming toward it. Keep the
+    // orbit pivot above the surface, including after panning or terrain focus.
+    if (target_.y < camera_floor + 1.0f) {
+        target_.y = camera_floor + 1.0f;
+        camera_pan_pending_.y = std::max(camera_pan_pending_.y, 0.0f);
+    }
+    Vec3 orbit_offset = ocean_safe_offset(target_, orbit * distance_);
+    float effective_camera_distance = std::sqrt(dot(orbit_offset, orbit_offset));
+    Vec3 eye = target_ + orbit_offset;
     if (flying_) {
         float roll = 0.0f;
         float pitch = 0.0f;
@@ -540,7 +597,7 @@ void AppState::frame() {
         flight_camera_center_ = flight_camera_center_ +
                                 (aircraft_position_ - flight_camera_center_) * position_blend;
 
-        // Apply the user orbit after chase smoothing so mouse movement is immediate.
+        // Apply the smoothed user orbit after the aircraft chase smoothing.
         Vec3 camera_offset =
             flight_camera_center_ - aircraft_position_ + flight_camera_offset_;
         camera_offset = rotate(
@@ -554,9 +611,13 @@ void AppState::frame() {
             camera_offset, orbit_right, flight_camera_pitch_offset_);
         camera_forward = normalize(camera_offset * -1.0f);
         Vec3 camera_up = normalize(cross(orbit_right, camera_forward));
-        eye = aircraft_position_ + camera_offset;
+        Vec3 camera_pivot = aircraft_position_;
+        camera_pivot.y = std::max(camera_pivot.y, camera_floor + 1.0f);
+        camera_offset = ocean_safe_offset(camera_pivot, camera_offset);
+        effective_camera_distance = std::sqrt(dot(camera_offset, camera_offset));
+        eye = camera_pivot + camera_offset;
         float framing_offset = 3.5f * flight_camera_distance_ / 55.0273f;
-        Vec3 camera_target = aircraft_position_ + camera_up * framing_offset;
+        Vec3 camera_target = camera_pivot + camera_up * framing_offset;
         forward = normalize(camera_target - eye);
         right = normalize(cross(forward, camera_up));
         up = normalize(cross(right, forward));
@@ -623,8 +684,8 @@ void AppState::frame() {
         Vec3{ 0.012f, 0.019f, 0.040f } * (1 - daylight) + Vec3{ 0.42f, 0.59f, 0.72f } * daylight;
     float sunset = std::exp(-std::abs(sun.y) * 10) * 0.32f;
     fog = fog * (1 - sunset) + Vec3{ 0.70f, 0.23f, 0.09f } * sunset;
-    float near_plane = flying_ ? std::max(0.5f, flight_camera_distance_ * 0.01f)
-                               : std::max(0.001f, distance_ * 0.0001f);
+    float near_plane = flying_ ? std::clamp(effective_camera_distance * 0.01f, 0.01f, 0.5f)
+                               : std::clamp(effective_camera_distance * 0.0001f, 0.001f, 0.5f);
     float far_plane = flying_ ? 6000.0f : std::max(6000.0f, distance_ + 4000.0f);
     Mat4 projection = perspective(float(w) / float(h), near_plane, far_plane);
     Mat4 vp = multiply(projection, look_at(eye, forward, right, up));
@@ -1189,6 +1250,9 @@ void AppState::frame() {
                                   flight_button_size.x - 20.0f * ui_scale,
         7.0f * ui_scale));
     if (ImGui::Button(flying_ ? "Stop" : "Fly", flight_button_size)) {
+        camera_rotation_pending_ = {};
+        camera_pan_pending_ = {};
+        camera_zoom_pending_ = 0.0f;
         if (flying_) {
             flying_ = false;
             autopilot_enabled_ = false;
