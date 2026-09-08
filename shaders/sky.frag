@@ -6,6 +6,7 @@ uniform vec3 cameraUp;
 uniform float aspect;
 uniform float tanHalfFov;
 uniform vec3 sunDirection;
+uniform vec3 celestialPole;
 uniform float daylight;
 uniform vec3 fogColor;
 uniform float atmosphereOpacity;
@@ -115,12 +116,16 @@ void main() {
     color += vec3(0.50, 0.58, 0.72) * moon * (1.0 - daylight);
     // Use the sun's orbital plane as a rotating celestial frame. Deriving it
     // from sunDirection keeps stars locked to both sun and moon, including pause.
-    vec3 celestialPole = normalize(vec3(-0.30, 0.0, 1.0));
     vec3 celestialUp = normalize(cross(celestialPole, sunDirection));
     vec3 starRay = vec3(dot(ray, sunDirection), dot(ray, celestialUp), dot(ray, celestialPole));
     float starVisibility=exp(-10.0*daylight*atmosphereOpacity);
     color += vec3(fullSkyStars(starRay)) * starVisibility;
-    float auroraVisibility=pow(1.0-daylight,3.0)*smoothstep(0.03,0.30,atmosphereOpacity);
+    // The pole's elevation equals observer latitude; northern lights fade over
+    // ten degrees at each edge of the 50-80 degree northern latitude band.
+    float latitude = degrees(asin(clamp(celestialPole.y, -1.0, 1.0)));
+    float auroraLatitude = smoothstep(50.0, 60.0, latitude)
+        * (1.0 - smoothstep(70.0, 80.0, latitude));
+    float auroraVisibility=pow(1.0-daylight,3.0)*smoothstep(0.03,0.30,atmosphereOpacity)*auroraLatitude;
     color += aurora(ray)*auroraVisibility;
     fragColor = vec4(max(color, vec3(0.0)), 1.0);
 }

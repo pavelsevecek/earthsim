@@ -29,6 +29,8 @@ private:
         uint32_t id;
     };
     struct alignas(16) GpuParticle {
+        // Keep in sync with the flag in particles.vert; vapor expands by default.
+        static constexpr uint32_t constant_radius = 1024u;
         float position_age[4];
         float velocity_life[4];
         float data[4];

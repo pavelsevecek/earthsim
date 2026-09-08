@@ -16,6 +16,7 @@ public:
         Vec3 right,
         Vec3 up,
         Vec3 sun,
+        Vec3 celestial_pole,
         Vec3 fog,
         float daylight,
         float atmosphere_opacity,

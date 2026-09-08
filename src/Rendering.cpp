@@ -15,6 +15,7 @@ void SkyRenderer::draw(Vec3 forward,
     Vec3 right,
     Vec3 up,
     Vec3 sun,
+    Vec3 celestial_pole,
     Vec3 fog,
     float daylight,
     float atmosphere_opacity,
@@ -27,6 +28,7 @@ void SkyRenderer::draw(Vec3 forward,
     uniform(shader_, "aspect", aspect);
     uniform(shader_, "tanHalfFov", std::tan(pi / 8));
     uniform(shader_, "sunDirection", sun);
+    uniform(shader_, "celestialPole", celestial_pole);
     uniform(shader_, "daylight", daylight);
     uniform(shader_, "fogColor", fog);
     uniform(shader_, "atmosphereOpacity", atmosphere_opacity);

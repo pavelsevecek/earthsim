@@ -485,7 +485,8 @@ void Volcanoes::add_tornado(Vec3 position, Vec3 direction_point, float water_lev
         Vec3 p = position + Vec3{ std::cos(phase) * radius, y, std::sin(phase) * radius };
         float size = range(4.0f, 6.f);
         records.push_back(
-            { { p.x, p.y, p.z, 0 }, { 0, 0, 0, lifetime }, { size, float(id), 64, 1 } });
+            { { p.x, p.y, p.z, 0 }, { 0, 0, 0, lifetime },
+                { size, float(id), float(64u | GpuParticle::constant_radius), 1 } });
     }
     gpu_.spawn(records);
 }

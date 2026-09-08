@@ -170,6 +170,7 @@ class AppState {
     float aircraft_vapor_emission_ = 0.0f;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
+    float latitude_ = 0.0f;
     bool day_night_paused_ = false;
     float meteor_size_ = 1.0f;
     float explosion_size_ = 1.0f;
@@ -678,7 +679,15 @@ void AppState::frame() {
         wrapped_day += 1.0;
     float day = float(wrapped_day);
     float angle = 2 * pi * (day - 0.25f);
-    Vec3 sun = normalize({ std::cos(angle), std::sin(angle), 0.30f * std::cos(angle) });
+    float latitude_radians = latitude_ * pi / 180.0f;
+    // Preserve the existing east/north orientation, tilting the celestial pole
+    // above the northern horizon by the observer's latitude (zero axial tilt).
+    Vec3 north = normalize({ -0.30f, 0.0f, 1.0f });
+    Vec3 world_up = { 0.0f, 1.0f, 0.0f };
+    Vec3 celestial_pole = north * std::cos(latitude_radians) + world_up * std::sin(latitude_radians);
+    Vec3 equatorial_up = world_up * std::cos(latitude_radians) - north * std::sin(latitude_radians);
+    Vec3 sun = normalize(Vec3{ std::cos(angle), 0.0f, 0.30f * std::cos(angle) } +
+        equatorial_up * std::sin(angle));
     float daylight = smooth(-0.15f, 0.22f, sun.y);
     Vec3 fog =
         Vec3{ 0.012f, 0.019f, 0.040f } * (1 - daylight) + Vec3{ 0.42f, 0.59f, 0.72f } * daylight;
@@ -731,6 +740,7 @@ void AppState::frame() {
         reflected_right,
         reflected_up,
         sun,
+        celestial_pole,
         fog,
         daylight,
         atmosphere_opacity_,
@@ -837,6 +847,7 @@ void AppState::frame() {
         right,
         up,
         sun,
+        celestial_pole,
         fog,
         daylight,
         atmosphere_opacity_,
@@ -874,12 +885,16 @@ void AppState::frame() {
         preview_radius = Volcanoes::meteor_radius(meteor_size_);
     else if (placement_ == PlacementTool::Explosion)
         preview_radius = Volcanoes::impact_radius(explosion_size_ * explosion_size_scale_);
+    else if (placement_ == PlacementTool::TornadoOrigin)
+        preview_radius = 6.0f; // Radius at the base of the tornado funnel.
     ImU32 preview_color = impact_preview ? IM_COL32(255, 150, 35, 255) : IM_COL32_WHITE;
     bool brush_preview = !flying_ && !io.WantCaptureMouse &&
         (placement_ == PlacementTool::TerrainUp || placement_ == PlacementTool::TerrainDown ||
             placement_ == PlacementTool::FlattenTerrain ||
             placement_ == PlacementTool::RoughenTerrain || placement_ == PlacementTool::AddWater ||
-            placement_ == PlacementTool::AddLava || impact_preview);
+            placement_ == PlacementTool::AddLava || impact_preview ||
+            placement_ == PlacementTool::TornadoOrigin ||
+            placement_ == PlacementTool::TornadoDirection);
     bool brush_hit = false;
     Vec3 brush_center{};
     if (place_click || target_click || brush_preview) {
@@ -1083,7 +1098,43 @@ void AppState::frame() {
         framebuffer_width,
         framebuffer_height);
 
-    if (brush_hit) {
+    if (brush_hit && placement_ == PlacementTool::TornadoDirection) {
+        ImDrawList* preview = ImGui::GetBackgroundDrawList();
+        auto draw_terrain_line = [&](Vec3 start, Vec3 end) {
+            float length = std::hypot(end.x - start.x, end.z - start.z);
+            int segments = std::max(1, int(std::ceil(length / 2.0f)));
+            ImVec2 previous_screen{};
+            bool previous_visible = false;
+            for (int i = 0; i <= segments; ++i) {
+                Vec3 point = start + (end - start) * (float(i) / float(segments));
+                ImVec2 screen{};
+                bool visible = false;
+                if (point.x >= -1000.0f && point.x <= 1000.0f &&
+                    point.z >= -1000.0f && point.z <= 1000.0f) {
+                    Vec3 normal;
+                    point.y = terrain_.surface(point.x, point.z, normal);
+                    visible = world_to_screen(
+                        point, eye, forward, right, up, io.DisplaySize, screen);
+                }
+                if (visible && previous_visible)
+                    preview->AddLine(previous_screen, screen, IM_COL32_WHITE, 1.5f * ui_scale);
+                previous_screen = screen;
+                previous_visible = visible;
+            }
+        };
+        Vec3 direction{ brush_center.x - tornado_origin_.x, 0,
+            brush_center.z - tornado_origin_.z };
+        float length = std::sqrt(dot(direction, direction));
+        if (length >= 5.0f) { // Match the minimum distance required to place a tornado.
+            direction = direction * (1.0f / length);
+            Vec3 side{ -direction.z, 0, direction.x };
+            float head_length = std::min(25.0f, length * 0.3f);
+            Vec3 head_base = brush_center - direction * head_length;
+            draw_terrain_line(tornado_origin_, brush_center);
+            draw_terrain_line(brush_center, head_base + side * (head_length * 0.5f));
+            draw_terrain_line(brush_center, head_base - side * (head_length * 0.5f));
+        }
+    } else if (brush_hit && placement_ != PlacementTool::None) {
         ImDrawList* preview = ImGui::GetBackgroundDrawList();
         constexpr int segments = 256;
         ImVec2 previous_screen{};
@@ -1341,6 +1392,11 @@ void AppState::frame() {
             "%.2f h",
             ImGuiSliderFlags_AlwaysClamp))
         day_phase_offset_ += time_of_day_hours / 24.0f - day;
+    ImGui::SetNextItemWidth(180 * ui_scale);
+    ImGui::SliderFloat(
+        "Latitude", &latitude_, -90.0f, 90.0f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Negative: south; positive: north. Axial tilt is zero.");
     if (ImGui::Button(day_night_paused_ ? "Resume day-night cycle" : "Pause day-night cycle"))
         day_night_paused_ = !day_night_paused_;
     ImGui::SetNextItemWidth(180 * ui_scale);

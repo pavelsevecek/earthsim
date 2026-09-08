@@ -45,6 +45,9 @@ void main() {
         bool water=(uint(particle.data.z)&16u)!=0u;
         bool vapor=(uint(particle.data.z)&(32u|64u))!=0u;
         bool tornado=(uint(particle.data.z)&64u)!=0u;
+        // Keep in sync with GpuParticle::constant_radius.
+        const uint constantRadius=1024u;
+        bool expands=(uint(particle.data.z)&constantRadius)==0u;
         bool selected=renderMode==0?(!trail&&!water&&!vapor):(renderMode==1?trail:(renderMode==2?water:vapor));
         if(particle.data.w<0.5 || !selected) {
             opacity=0.0;
@@ -54,7 +57,7 @@ void main() {
         center=particle.positionAge.xyz;
         float life=(trail||tornado)?particle.velocityLife.w:particleLifetime;
         float normalizedAge=clamp(particle.positionAge.w/max(life,0.001),0.0,1.0);
-        float sizeScale=trail?(1.0+2.0*normalizedAge):(vapor?(1.0+15.0*normalizedAge):1.0);
+        float sizeScale=trail?(1.0+2.0*normalizedAge):((vapor&&expands)?(1.0+15.0*normalizedAge):1.0);
         size=particle.data.x*sizeScale;
         float ageFade=1.0-smoothstep(0.8,1.0,normalizedAge);
         opacity=trail?pow(1.0-normalizedAge,2.0):ageFade;
