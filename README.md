@@ -4,6 +4,8 @@ EarthSim is a C++17/OpenGL 4.3 terrain and weather simulator. It renders procedu
 
 Use **Explosion**, choose an **Explosion size**, and click the terrain to create a crater, ejecta, an expanding blast shell, and a simulated plume. The current implementation keeps one high-resolution plume active at a time; a new explosion replaces the previous plume.
 
+Choose **Drive** to spawn an offroad vehicle at a random surface location, preferring dry, gentle ground. Use **W/S** for forward/reverse, **A/D** to steer, and **Space** to brake. The four wheels support the chassis through spring suspension and apply tire forces at their contact points. The vehicle preserves linear and angular momentum through jumps: uneven ground and impacts can pitch, roll, or tumble it, and gravity brings it back down. Rotation uses spherical inertia, I = (2/5) m r^2, with a 1200 kg mass and a 2.5 m effective inertia radius. Chassis and wheel impacts account for both translation and rotation. Steering, acceleration, and braking require wheel contact; entering the ocean destroys it with a water impact, without a crater or terrain ejecta. Steering retains its full range at every speed. Hold the **right mouse button** to orbit the chase camera and use the **mouse wheel** to zoom. **Stop** returns to the terrain view. Driving follows the simulation time speed, including pause.
+
 ## Build
 
 Requirements:

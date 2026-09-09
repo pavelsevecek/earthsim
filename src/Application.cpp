@@ -1,5 +1,6 @@
 #include "Application.hpp"
 
+#include "OffroadVehicle.hpp"
 #include "Rendering.hpp"
 #include <limits>
 #include <sstream>
@@ -117,6 +118,10 @@ class AppState {
     TerrainRenderer terrain_renderer_;
     SkyRenderer sky_renderer_;
     AircraftRenderer aircraft_renderer_;
+    AircraftRenderer offroad_body_renderer_;
+    AircraftRenderer offroad_wheel_renderer_;
+    OffroadVehicle vehicle_;
+    bool driving_ = false;
     WaterRenderer water_renderer_;
     Terrain terrain_;
     Volcanoes volcanoes_;
@@ -167,6 +172,9 @@ class AppState {
     float flight_camera_yaw_offset_ = 0.0f;
     float flight_camera_pitch_offset_ = 0.0f;
     float flight_camera_distance_ = 55.0273f;
+    float drive_camera_yaw_ = 0;
+    float drive_camera_elevation_ = 0.32f;
+    bool drive_camera_initialized_ = false;
     float aircraft_vapor_emission_ = 0.0f;
     float time_speed_ = 1.0f;
     float day_phase_offset_ = 0.34f;
@@ -221,6 +229,8 @@ public:
         , terrain_renderer_(directory_)
         , sky_renderer_(directory_)
         , aircraft_renderer_(directory_)
+        , offroad_body_renderer_(directory_, AircraftRenderer::Shape::OffroadBody)
+        , offroad_wheel_renderer_(directory_, AircraftRenderer::Shape::OffroadWheel)
         , water_renderer_(directory_)
         , terrain_(random_terrain_seed())
         , volcanoes_(directory_, terrain_)
@@ -241,6 +251,35 @@ public:
             glDeleteTextures(1, &placement_tools_texture_);
     }
 
+    void draw_vehicle(const Mat4& vp, Vec3 sun, float daylight, bool mirrored = false) {
+        auto rotate = [](Vec3 vector, Vec3 axis, float angle) {
+            return vector * std::cos(angle) + cross(axis, vector) * std::sin(angle) +
+                   axis * (dot(axis, vector) * (1 - std::cos(angle)));
+        };
+        offroad_body_renderer_.draw(vp,
+            vehicle_.body_position(),
+            vehicle_.forward,
+            vehicle_.right,
+            vehicle_.up,
+            sun,
+            daylight,
+            mirrored);
+        for (int i = 0; i < 4; ++i) {
+            Vec3 wheel_forward =
+                rotate(vehicle_.forward, vehicle_.up, i < 2 ? vehicle_.steering : 0);
+            Vec3 wheel_right = normalize(cross(wheel_forward, vehicle_.up));
+            Vec3 wheel_up = rotate(vehicle_.up, wheel_right, -vehicle_.wheel_angle);
+            wheel_forward = normalize(cross(wheel_up, wheel_right));
+            offroad_wheel_renderer_.draw(vp,
+                vehicle_.wheels[i],
+                wheel_forward,
+                wheel_right,
+                wheel_up,
+                sun,
+                daylight,
+                mirrored);
+        }
+    }
     void frame();
 };
 
@@ -277,7 +316,7 @@ void AppState::frame() {
         volcanoes_.terrain_texture());
     lightning_.update(terrain_, elapsed, water_level_, cloud_base_, cloud_top, volcanoes_);
     static const std::vector<Volcanoes::Meteor> no_moving_meteors;
-    if (cloud_simulation_enabled_ && !flying_)
+    if (cloud_simulation_enabled_ && !flying_ && !driving_)
         clouds_.update(elapsed,
             float(simulation_time_),
             particle_simulation_enabled_ ? volcanoes_.meteors() : no_moving_meteors,
@@ -310,16 +349,15 @@ void AppState::frame() {
             placement_miss_ = false;
         }
     }
-    bool place_click = !flying_ && placement_ != PlacementTool::None && !io.WantCaptureMouse &&
-                       ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-    bool target_click = !flying_ && placement_ == PlacementTool::None && !io.WantCaptureMouse &&
-                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    bool place_click = !flying_ && !driving_ && placement_ != PlacementTool::None &&
+                       !io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    bool target_click = !flying_ && !driving_ && placement_ == PlacementTool::None &&
+                        !io.WantCaptureMouse && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
     if (placement_ != PlacementTool::None && !io.WantCaptureMouse)
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     if (!io.WantCaptureMouse) {
-        if (!flying_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-            placement_ == PlacementTool::None &&
-            !target_click)
+        if (!flying_ && !driving_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            placement_ == PlacementTool::None && !target_click)
             panning_ = true;
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
             rotating_ = true;
@@ -364,7 +402,7 @@ void AppState::frame() {
     float zoom = smooth_motion(
         focused && !io.WantCaptureMouse && !target_click ? io.MouseWheel : 0.0f,
         camera_zoom_pending_);
-    if (flying_) {
+    if (flying_ || driving_) {
         flight_camera_yaw_offset_ =
             std::remainder(flight_camera_yaw_offset_ - rotation_x * 0.005f, 2 * pi);
         flight_camera_pitch_offset_ =
@@ -374,7 +412,7 @@ void AppState::frame() {
         pitch_ = std::remainder(pitch_ + rotation_y * 0.005f, 2 * pi);
     }
     if (zoom != 0.0f) {
-        if (flying_) {
+        if (flying_ || driving_) {
             float zoomed = flight_camera_distance_ * std::exp(-zoom * 0.12f);
             if (std::isfinite(zoomed))
                 flight_camera_distance_ = std::clamp(zoomed, 14.0f, 500.0f);
@@ -392,7 +430,7 @@ void AppState::frame() {
     Vec3 forward = orbit * (-1);
     Vec3 right{ std::cos(yaw_), 0, -std::sin(yaw_) };
     Vec3 up = cross(right, forward);
-    if (!flying_) {
+    if (!flying_ && !driving_) {
         // Match screen-space dragging at the orbit target, including on HiDPI displays.
         float units_per_pixel = 2 * distance_ * std::tan(pi / 8) / std::max(io.DisplaySize.y, 1.0f);
         Vec3 pan_input = panning_ ? right * (-io.MouseDelta.x * units_per_pixel) +
@@ -623,7 +661,70 @@ void AppState::frame() {
         right = normalize(cross(forward, camera_up));
         up = normalize(cross(right, forward));
     }
-    if (!flying_ && camera_shake_enabled_ && camera_shake_strength_ > 0.001f) {
+    if (driving_) {
+        bool controls = focused && !io.WantCaptureKeyboard;
+        float throttle =
+            controls ? float(ImGui::IsKeyDown(ImGuiKey_W)) - float(ImGui::IsKeyDown(ImGuiKey_S))
+                     : 0;
+        float turn = controls
+                         ? float(ImGui::IsKeyDown(ImGuiKey_A)) - float(ImGui::IsKeyDown(ImGuiKey_D))
+                         : 0;
+        if (!vehicle_.destroyed) {
+            vehicle_.update(terrain_,
+                float(elapsed),
+                throttle,
+                turn,
+                controls && ImGui::IsKeyDown(ImGuiKey_Space),
+                water_level_);
+            if (vehicle_.destroyed)
+                volcanoes_.water_impact(vehicle_.water_impact, 0.35f);
+        }
+        Vec3 heading{ vehicle_.forward.x, 0, vehicle_.forward.z };
+        if (dot(heading, heading) > 0.01f)
+            flight_camera_horizontal_right_ = normalize(cross(heading, Vec3{ 0, 1, 0 }));
+        // Retain the last camera heading while a jump or tumble points the nose vertically.
+        heading = normalize(cross(Vec3{ 0, 1, 0 }, flight_camera_horizontal_right_));
+        float heading_yaw = std::atan2(heading.x, heading.z) + flight_camera_yaw_offset_;
+        float elevation = std::clamp(0.32f + flight_camera_pitch_offset_, 0.08f, 1.35f);
+        // Use real time for a consistent camera response, even when physics is paused.
+        auto smooth_angle = [](float current, float target, float blend) {
+            return std::remainder(current + std::remainder(target - current, 2 * pi) * blend, 2 * pi);
+        };
+        bool initialize = !drive_camera_initialized_;
+        float orbit_blend = initialize ? 1.0f : -std::expm1(-camera_dt / 0.28f);
+        drive_camera_yaw_ = smooth_angle(drive_camera_yaw_, heading_yaw, orbit_blend);
+        drive_camera_elevation_ += (elevation - drive_camera_elevation_) * orbit_blend;
+        heading_yaw = drive_camera_yaw_;
+        elevation = drive_camera_elevation_;
+        Vec3 offset = Vec3{ -std::sin(heading_yaw) * std::cos(elevation),
+            std::sin(elevation),
+            -std::cos(heading_yaw) * std::cos(elevation) } *
+                      flight_camera_distance_;
+        Vec3 pivot = vehicle_.body_position();
+        eye = pivot + offset;
+        // Check the whole chase arm so intervening hills cannot hide the vehicle.
+        for (int i = 1; i <= 64; ++i) {
+            Vec3 point = pivot + offset * (float(i) / 64);
+            Vec3 normal;
+            if (point.y < std::max(terrain_.surface(point.x, point.z, normal), water_level_) + 1) {
+                eye = pivot + offset * (float(i - 1) / 64);
+                break;
+            }
+        }
+        Vec3 normal;
+        eye.y =
+            std::max(eye.y, std::max(terrain_.surface(eye.x, eye.z, normal), water_level_) + 1.0f);
+        if (std::hypot(eye.x - pivot.x, eye.z - pivot.z) < 0.1f)
+            eye = eye - heading * 0.2f;
+        effective_camera_distance = std::sqrt(dot(eye - pivot, eye - pivot));
+        // Smooth the orbit only. A separately filtered look direction lags behind
+        // RMB movement and lets the vehicle drift away from the screen center.
+        forward = normalize(pivot - eye);
+        drive_camera_initialized_ = true;
+        right = normalize(cross(forward, Vec3{ 0, 1, 0 }));
+        up = normalize(cross(right, forward));
+    }
+    if (!flying_ && !driving_ && camera_shake_enabled_ && camera_shake_strength_ > 0.001f) {
         // High-frequency, non-repeating local rotations feel like an impact without
         // disturbing the orbit camera's persistent target, yaw, or pitch.
         float t = float(camera_shake_time_);
@@ -636,9 +737,8 @@ void AppState::frame() {
         right = normalize(cross(forward, rolled_up));
         up = cross(right, forward);
     }
-    if (!flying_ && source_icons_visible_ && placement_ == PlacementTool::None &&
-        !io.WantCaptureMouse &&
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (!flying_ && !driving_ && source_icons_visible_ && placement_ == PlacementTool::None &&
+        !io.WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         SourceType closest_type = SourceType::None;
         size_t closest_index = 0;
         float closest_distance_squared = std::pow(11.0f * ui_scale, 2.0f);
@@ -667,7 +767,8 @@ void AppState::frame() {
             target_click = false;
         }
     }
-    if (!flying_ && !io.WantCaptureKeyboard && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+    if (!flying_ && !driving_ && !io.WantCaptureKeyboard &&
+        ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
         if (selected_source_type_ == SourceType::Lava)
             volcanoes_.remove_lava_source(selected_source_index_);
         else if (selected_source_type_ == SourceType::Spring)
@@ -693,9 +794,10 @@ void AppState::frame() {
         Vec3{ 0.012f, 0.019f, 0.040f } * (1 - daylight) + Vec3{ 0.42f, 0.59f, 0.72f } * daylight;
     float sunset = std::exp(-std::abs(sun.y) * 10) * 0.32f;
     fog = fog * (1 - sunset) + Vec3{ 0.70f, 0.23f, 0.09f } * sunset;
-    float near_plane = flying_ ? std::clamp(effective_camera_distance * 0.01f, 0.01f, 0.5f)
-                               : std::clamp(effective_camera_distance * 0.0001f, 0.001f, 0.5f);
-    float far_plane = flying_ ? 6000.0f : std::max(6000.0f, distance_ + 4000.0f);
+    float near_plane = (flying_ || driving_)
+                           ? std::clamp(effective_camera_distance * 0.01f, 0.01f, 0.5f)
+                           : std::clamp(effective_camera_distance * 0.0001f, 0.001f, 0.5f);
+    float far_plane = (flying_ || driving_) ? 6000.0f : std::max(6000.0f, distance_ + 4000.0f);
     Mat4 projection = perspective(float(w) / float(h), near_plane, far_plane);
     Mat4 vp = multiply(projection, look_at(eye, forward, right, up));
     if (particle_simulation_enabled_)
@@ -760,8 +862,8 @@ void AppState::frame() {
         fog,
         daylight,
         atmosphere_opacity_,
-        flying_ && !aircraft_destroyed_,
-        aircraft_position_,
+        (flying_ && !aircraft_destroyed_) || (driving_ && !vehicle_.destroyed),
+        driving_ ? vehicle_.body_position() : aircraft_position_,
         true,
         water_level_,
         eye.y >= water_level_ ? 1.0f : -1.0f);
@@ -775,6 +877,11 @@ void AppState::frame() {
             sun,
             daylight,
             true);
+        glEnable(GL_CLIP_DISTANCE0);
+    }
+    if (driving_ && !vehicle_.destroyed) {
+        glDisable(GL_CLIP_DISTANCE0);
+        draw_vehicle(reflection_vp, sun, daylight, true);
         glEnable(GL_CLIP_DISTANCE0);
     }
     float reflection_clip_direction = eye.y >= water_level_ ? 1.0f : -1.0f;
@@ -868,8 +975,8 @@ void AppState::frame() {
         fog,
         daylight,
         atmosphere_opacity_,
-        flying_ && !aircraft_destroyed_,
-        aircraft_position_);
+        (flying_ && !aircraft_destroyed_) || (driving_ && !vehicle_.destroyed),
+        driving_ ? vehicle_.body_position() : aircraft_position_);
     if (flying_ && !aircraft_destroyed_)
         aircraft_renderer_.draw(vp,
             aircraft_position_,
@@ -878,6 +985,8 @@ void AppState::frame() {
             aircraft_up_,
             sun,
             daylight);
+    if (driving_ && !vehicle_.destroyed)
+        draw_vehicle(vp, sun, daylight);
     bool impact_preview = placement_ == PlacementTool::Meteor ||
         placement_ == PlacementTool::Explosion;
     float preview_radius = brush_radius_;
@@ -888,7 +997,8 @@ void AppState::frame() {
     else if (placement_ == PlacementTool::TornadoOrigin)
         preview_radius = 6.0f; // Radius at the base of the tornado funnel.
     ImU32 preview_color = impact_preview ? IM_COL32(255, 150, 35, 255) : IM_COL32_WHITE;
-    bool brush_preview = !flying_ && !io.WantCaptureMouse &&
+    bool brush_preview =
+        !flying_ && !driving_ && !io.WantCaptureMouse &&
         (placement_ == PlacementTool::TerrainUp || placement_ == PlacementTool::TerrainDown ||
             placement_ == PlacementTool::FlattenTerrain ||
             placement_ == PlacementTool::RoughenTerrain || placement_ == PlacementTool::AddWater ||
@@ -1159,7 +1269,7 @@ void AppState::frame() {
         }
     }
 
-    if (!flying_ && source_icons_visible_) {
+    if (!flying_ && !driving_ && source_icons_visible_) {
         ImDrawList* source_icons = ImGui::GetBackgroundDrawList();
         for (size_t i = 0; i < volcanoes_.lava_sources().size(); ++i) {
             ImVec2 screen;
@@ -1197,7 +1307,7 @@ void AppState::frame() {
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoMove);
 
-    if (!flying_) {
+    if (!flying_ && !driving_) {
         struct ToolButton {
             PlacementTool tool;
             const char* id;
@@ -1282,8 +1392,10 @@ void AppState::frame() {
         }
     } else {
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(
-            "Flight mode    W: descend    S: climb    A/D: roll    RMB: camera    Wheel: zoom");
+        ImGui::TextUnformatted(driving_ ? "Drive    W/S: forward/reverse    A/D: steer    Space: "
+                                          "brake    RMB: camera    Wheel: zoom"
+                                        : "Flight mode    W: descend    S: climb    A/D: roll    "
+                                          "RMB: camera    Wheel: zoom");
     }
     const ImVec2 close_button_size(36.0f * ui_scale, 36.0f * ui_scale);
     const ImVec2 flight_button_size(62.0f * ui_scale, 36.0f * ui_scale);
@@ -1297,17 +1409,43 @@ void AppState::frame() {
                 autopilot_enabled_ ? "Autopilot: On" : "Autopilot", autopilot_button_size))
             autopilot_enabled_ = !autopilot_enabled_;
     }
+    if (!flying_ && !driving_) {
+        ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - close_button_size.x -
+                                       2 * flight_button_size.x - 30.0f * ui_scale,
+            7.0f * ui_scale));
+        if (ImGui::Button("Drive", flight_button_size)) {
+            vehicle_.spawn(terrain_, water_level_, random_);
+            driving_ = true;
+            drive_camera_initialized_ = false;
+            cloud_simulation_enabled_ = false;
+            placement_ = PlacementTool::None;
+            placement_miss_ = false;
+            selected_source_type_ = SourceType::None;
+            panning_ = rotating_ = false;
+            camera_rotation_pending_ = {};
+            camera_pan_pending_ = {};
+            camera_zoom_pending_ = 0;
+            flight_camera_distance_ = 24;
+            flight_camera_yaw_offset_ = flight_camera_pitch_offset_ = 0;
+            flight_camera_center_ = vehicle_.position;
+        }
+    }
     ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - close_button_size.x -
                                   flight_button_size.x - 20.0f * ui_scale,
         7.0f * ui_scale));
-    if (ImGui::Button(flying_ ? "Stop" : "Fly", flight_button_size)) {
+    if (ImGui::Button((flying_ || driving_) ? "Stop" : "Fly", flight_button_size)) {
         camera_rotation_pending_ = {};
         camera_pan_pending_ = {};
         camera_zoom_pending_ = 0.0f;
-        if (flying_) {
+        if (flying_ || driving_) {
+            cloud_simulation_enabled_ = true;
+            if (driving_) {
+                target_ = vehicle_.position;
+                distance_ = 100.0f;
+            }
+            driving_ = false;
             flying_ = false;
             autopilot_enabled_ = false;
-            cloud_simulation_enabled_ = true;
         } else {
             cloud_simulation_enabled_ = false;
             placement_ = PlacementTool::None;
@@ -1513,10 +1651,10 @@ void AppState::frame() {
     ImGui::Checkbox("Clouds", &clouds_enabled_);
     ImGui::Checkbox("Cloud shadows", &cloud_shadows_enabled_);
     ImGui::Checkbox("God rays", &god_rays_enabled_);
-    if (flying_)
+    if (flying_ || driving_)
         ImGui::BeginDisabled();
     ImGui::Checkbox("Cloud simulation", &cloud_simulation_enabled_);
-    if (flying_)
+    if (flying_ || driving_)
         ImGui::EndDisabled();
     if (ImGui::Button("Clear clouds"))
         clouds_.clear_density();

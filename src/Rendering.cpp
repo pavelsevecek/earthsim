@@ -37,7 +37,7 @@ void SkyRenderer::draw(Vec3 forward,
     glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 
-AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory) {
+AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory, Shape shape) {
     shader_ = program(directory, "aircraft");
     struct Vertex {
         Vec3 position;
@@ -45,7 +45,7 @@ AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory) {
         Vec3 color;
     };
     std::vector<Vertex> vertices;
-    constexpr float aircraft_scale = 0.5f;
+    const float aircraft_scale = shape == Shape::Aircraft ? 0.5f : 1.0f;
     auto triangle = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 color) {
         a = a * aircraft_scale;
         b = b * aircraft_scale;
@@ -55,40 +55,76 @@ AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory) {
             { { a, normal, color }, { b, normal, color }, { c, normal, color } });
     };
 
-    const Vec3 white{ 0.82f, 0.86f, 0.90f };
-    const Vec3 dark{ 0.12f, 0.18f, 0.24f };
-    const Vec3 red{ 0.78f, 0.08f, 0.06f };
-    const Vec3 nose{ 0, 0, 9 };
-    const Vec3 tail{ 0, 0, -7 };
-    const Vec3 top{ 0, 1.2f, 0 };
-    const Vec3 bottom{ 0, -0.75f, 0 };
-    const Vec3 left{ -1.25f, 0, 0 };
-    const Vec3 right{ 1.25f, 0, 0 };
-    triangle(nose, right, top, white);
-    triangle(nose, bottom, right, white);
-    triangle(nose, left, bottom, red);
-    triangle(nose, top, left, white);
-    triangle(tail, top, right, dark);
-    triangle(tail, right, bottom, dark);
-    triangle(tail, bottom, left, red);
-    triangle(tail, left, top, dark);
+    if (shape == Shape::OffroadBody) {
+        auto box = [&](Vec3 lo, Vec3 hi, Vec3 color) {
+            Vec3 p[] = { { lo.x, lo.y, lo.z },
+                { hi.x, lo.y, lo.z },
+                { hi.x, hi.y, lo.z },
+                { lo.x, hi.y, lo.z },
+                { lo.x, lo.y, hi.z },
+                { hi.x, lo.y, hi.z },
+                { hi.x, hi.y, hi.z },
+                { lo.x, hi.y, hi.z } };
+            const int faces[][4] = { { 0, 3, 2, 1 },
+                { 4, 5, 6, 7 },
+                { 0, 4, 7, 3 },
+                { 1, 2, 6, 5 },
+                { 3, 7, 6, 2 },
+                { 0, 1, 5, 4 } };
+            for (const auto& f : faces) {
+                triangle(p[f[0]], p[f[1]], p[f[2]], color);
+                triangle(p[f[0]], p[f[2]], p[f[3]], color);
+            }
+        };
+        box({ -1.45f, -0.35f, -2.8f }, { 1.45f, 0.65f, 2.9f }, { 0.82f, 0.32f, 0.055f });
+        box({ -1.2f, 0.65f, -1.7f }, { 1.2f, 2.0f, 0.9f }, { 0.12f, 0.23f, 0.28f });
+        box({ -1.35f, 2.0f, -1.85f }, { 1.35f, 2.18f, 1.05f }, { 0.85f, 0.39f, 0.08f });
+        box({ -1.55f, -0.25f, 2.9f }, { 1.55f, 0.1f, 3.15f }, { 0.1f, 0.11f, 0.12f });
+        box({ -1.55f, -0.25f, -3.0f }, { 1.55f, 0.1f, -2.8f }, { 0.1f, 0.11f, 0.12f });
+        for (float side : { -1.0f, 1.0f })
+            box({ side * 1.0f - 0.25f, 0.2f, 2.9f },
+                { side * 1.0f + 0.25f, 0.5f, 2.94f },
+                { 1.0f, 0.92f, 0.65f });
+    } else if (shape == Shape::OffroadWheel) {
+        constexpr int segments = 20;
+        for (int i = 0; i < segments; ++i) {
+            float a = 2 * pi * i / segments, b = 2 * pi * (i + 1) / segments;
+            Vec3 p{ -0.42f, 0.9f * std::cos(a), 0.9f * std::sin(a) };
+            Vec3 q{ -0.42f, 0.9f * std::cos(b), 0.9f * std::sin(b) };
+            Vec3 r{ 0.42f, q.y, q.z }, s{ 0.42f, p.y, p.z };
+            Vec3 tread = i % 2 ? Vec3{ 0.065f, 0.07f, 0.075f } : Vec3{ 0.12f, 0.13f, 0.14f };
+            triangle(p, q, r, tread);
+            triangle(p, r, s, tread);
+            triangle({ -0.42f, 0, 0 }, q, p, { 0.19f, 0.20f, 0.21f });
+            triangle({ 0.42f, 0, 0 }, s, r, { 0.19f, 0.20f, 0.21f });
+        }
+    } else {
+        const Vec3 white{ 0.82f, 0.86f, 0.90f };
+        const Vec3 dark{ 0.12f, 0.18f, 0.24f };
+        const Vec3 red{ 0.78f, 0.08f, 0.06f };
+        const Vec3 nose{ 0, 0, 9 };
+        const Vec3 tail{ 0, 0, -7 };
+        const Vec3 top{ 0, 1.2f, 0 };
+        const Vec3 bottom{ 0, -0.75f, 0 };
+        const Vec3 left{ -1.25f, 0, 0 };
+        const Vec3 right{ 1.25f, 0, 0 };
+        triangle(nose, right, top, white);
+        triangle(nose, bottom, right, white);
+        triangle(nose, left, bottom, red);
+        triangle(nose, top, left, white);
+        triangle(tail, top, right, dark);
+        triangle(tail, right, bottom, dark);
+        triangle(tail, bottom, left, red);
+        triangle(tail, left, top, dark);
 
-    // Broad, slightly swept wings and a vertical tail make the silhouette readable.
-    triangle(
-        { -0.5f, 0.05f, 2.0f }, { -10.0f, 0.0f, -2.2f }, { -0.5f, 0.05f, -1.8f }, white);
-    triangle(
-        { 0.5f, 0.05f, 2.0f }, { 0.5f, 0.05f, -1.8f }, { 10.0f, 0.0f, -2.2f }, white);
-    triangle({ -0.5f, -0.08f, -1.8f },
-        { -10.0f, -0.08f, -2.2f },
-        { -0.5f, -0.08f, 2.0f },
-        red);
-    triangle({ 0.5f, -0.08f, -1.8f },
-        { 0.5f, -0.08f, 2.0f },
-        { 10.0f, -0.08f, -2.2f },
-        red);
-    triangle({ 0, 0.3f, -4.5f }, { 0, 4.0f, -6.4f }, { 0, 0.3f, -6.8f }, red);
-    triangle({ 0, 0.3f, -4.5f }, { 0, 0.3f, -6.8f }, { 0, 4.0f, -6.4f }, red);
-
+        // Broad, slightly swept wings and a vertical tail make the silhouette readable.
+        triangle({ -0.5f, 0.05f, 2.0f }, { -10.0f, 0.0f, -2.2f }, { -0.5f, 0.05f, -1.8f }, white);
+        triangle({ 0.5f, 0.05f, 2.0f }, { 0.5f, 0.05f, -1.8f }, { 10.0f, 0.0f, -2.2f }, white);
+        triangle({ -0.5f, -0.08f, -1.8f }, { -10.0f, -0.08f, -2.2f }, { -0.5f, -0.08f, 2.0f }, red);
+        triangle({ 0.5f, -0.08f, -1.8f }, { 0.5f, -0.08f, 2.0f }, { 10.0f, -0.08f, -2.2f }, red);
+        triangle({ 0, 0.3f, -4.5f }, { 0, 4.0f, -6.4f }, { 0, 0.3f, -6.8f }, red);
+        triangle({ 0, 0.3f, -4.5f }, { 0, 0.3f, -6.8f }, { 0, 4.0f, -6.4f }, red);
+    }
     vertex_count_ = GLsizei(vertices.size());
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);

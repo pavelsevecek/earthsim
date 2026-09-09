@@ -40,6 +40,7 @@ add_executable(EarthSim
     src/Application.hpp
     src/Common.cpp
     src/Common.hpp
+    src/OffroadVehicle.hpp
     src/Physics.cpp
     src/Physics.hpp
     src/Rendering.cpp

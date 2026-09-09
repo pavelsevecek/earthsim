@@ -31,7 +31,9 @@ class AircraftRenderer {
     GLsizei vertex_count_ = 0;
 
 public:
-    explicit AircraftRenderer(const std::filesystem::path& directory);
+    enum class Shape { Aircraft, OffroadBody, OffroadWheel };
+    explicit AircraftRenderer(const std::filesystem::path& directory,
+        Shape shape = Shape::Aircraft);
     ~AircraftRenderer();
     void draw(const Mat4& vp,
         Vec3 position,

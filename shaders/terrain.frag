@@ -27,6 +27,46 @@ float terrainNoise(vec2 position) {
     float d=terrainHash(cell+vec2(1.0,1.0));
     return mix(mix(a,b,fraction.x),mix(c,d,fraction.x),fraction.y);
 }
+float detailHash(ivec3 cell) {
+    uvec3 p=uvec3(cell);
+    uint h=p.x*1597334677u+p.y*3812015801u+p.z*2798796415u;
+    h=(h^(h>>16u))*2246822519u;
+    h=(h^(h>>13u))*3266489917u;
+    return float((h^(h>>16u))>>8u)/16777216.0;
+}
+// Value and analytic spatial gradient of smooth 3D noise. Using all three
+// coordinates keeps cliff detail from stretching into vertical stripes.
+vec4 detailNoise(vec3 p) {
+    ivec3 cell=ivec3(floor(p));
+    vec3 f=fract(p);
+    vec3 u=f*f*f*(f*(f*6.0-15.0)+10.0);
+    vec3 du=30.0*f*f*(f-1.0)*(f-1.0);
+    float a=detailHash(cell),b=detailHash(cell+ivec3(1,0,0));
+    float c=detailHash(cell+ivec3(0,1,0)),d=detailHash(cell+ivec3(1,1,0));
+    float e=detailHash(cell+ivec3(0,0,1)),f1=detailHash(cell+ivec3(1,0,1));
+    float g=detailHash(cell+ivec3(0,1,1)),h=detailHash(cell+ivec3(1,1,1));
+    float low=mix(mix(a,b,u.x),mix(c,d,u.x),u.y);
+    float high=mix(mix(e,f1,u.x),mix(g,h,u.x),u.y);
+    vec3 gradient=vec3(
+        mix(mix(b-a,d-c,u.y),mix(f1-e,h-g,u.y),u.z)*du.x,
+        mix(mix(c-a,d-b,u.x),mix(g-e,h-f1,u.x),u.z)*du.y,
+        (high-low)*du.z);
+    return vec4(mix(low,high,u.z)-0.5,gradient);
+}
+vec4 terrainDetail(vec3 p) {
+    float footprint=max(length(dFdx(p)),length(dFdy(p)));
+    vec4 detail=vec4(0.0);
+    float frequency=0.7,amplitude=0.6;
+    for(int octave=0;octave<3;++octave) {
+        // Fade unresolved octaves toward their mean before they can alias.
+        float weight=amplitude*(1.0-smoothstep(0.2,0.65,footprint*frequency));
+        vec4 sampleNoise=detailNoise(p*frequency+vec3(17.0,43.0,29.0)*float(octave));
+        detail+=vec4(sampleNoise.x,sampleNoise.yzw*frequency)*weight;
+        frequency*=3.0;
+        amplitude*=0.45;
+    }
+    return detail;
+}
 float sampleScorched(vec2 uv) {
     ivec2 size=textureSize(terrainScorched,0);
     vec2 position=uv*vec2(size)-0.5;
@@ -64,12 +104,19 @@ void main() {
     vec3 albedo = mix(grass, rock, rocky);
     float snow = smoothstep(77.5 + 6.0 * grain, 105.0, worldPosition.y) * smoothstep(0.48, 0.85, n.y);
     albedo = mix(albedo, vec3(0.88, 0.92, 0.95), snow);
+    vec4 detail=terrainDetail(worldPosition);
+    float detailStrength=mix(mix(0.30,0.48,rocky),0.12,snow);
+    albedo*=1.0+detail.x*detailStrength;
     vec2 wetUv=clamp(worldPosition.xz/2000.0+0.5,vec2(0.0),vec2(0.99999));
     uvec2 wetCell=uvec2(wetUv*256.0);
     float wetAmount=clamp(float(wetness[wetCell.y*256u+wetCell.x])/65535.0,0.0,1.0);
     albedo=mix(albedo,albedo*0.38+vec3(0.008,0.014,0.018),wetAmount*0.78);
     float scorchedAmount=clamp(sampleScorched(wetUv),0.0,1.0);
     albedo=mix(albedo,vec3(0.028,0.025,0.023),scorchedAmount);
+    // Perturb lighting only; material slopes and shadow bias use the original normals.
+    vec3 tangentGradient=detail.yzw-n*dot(n,detail.yzw);
+    float bumpStrength=mix(0.16,0.055,snow)*mix(1.0,0.55,wetAmount);
+    n=normalize(n-tangentGradient*bumpStrength);
     float direct = max(dot(n, sunDirection), 0.0) * smoothstep(-0.05, 0.14, sunDirection.y);
     vec3 sunlight = mix(vec3(1.0, 0.38, 0.14), vec3(1.0, 0.96, 0.84), smoothstep(0.0, 0.4, sunDirection.y));
     vec3 ambient = mix(vec3(0.045, 0.065, 0.12), vec3(0.28, 0.34, 0.40), daylight);
