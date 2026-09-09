@@ -31,7 +31,7 @@ class AircraftRenderer {
     GLsizei vertex_count_ = 0;
 
 public:
-    enum class Shape { Aircraft, OffroadBody, OffroadWheel };
+    enum class Shape { Aircraft, OffroadBody, OffroadWheel, Boat };
     explicit AircraftRenderer(const std::filesystem::path& directory,
         Shape shape = Shape::Aircraft);
     ~AircraftRenderer();
@@ -72,6 +72,10 @@ public:
 
 class WaterRenderer {
     static constexpr int resolution_ = 256;
+    static constexpr int foam_resolution_ = 1024;
+    GLuint foam_ = 0;
+    GLuint wake_ = 0;
+    GLuint surface_read_fbo_ = 0;
     GLuint shader_ = 0;
     GLuint simulation_ = 0;
     GLuint impact_ = 0;
@@ -86,6 +90,8 @@ class WaterRenderer {
 public:
     explicit WaterRenderer(const std::filesystem::path& directory);
     ~WaterRenderer();
+    void update_wake(double elapsed, Vec3 start, Vec3 end, bool sailing);
+    float surface(Vec3 position, float water_level, bool simulation_enabled, Vec3& normal);
     void update(double elapsed,
         const std::vector<Volcanoes::WaterImpact>& impacts,
         bool simulation_enabled,

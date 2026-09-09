@@ -1,0 +1,28 @@
+#version 430 core
+layout(local_size_x=16,local_size_y=16) in;
+layout(r16f,binding=0) uniform image2D foamState;
+uniform float dt;
+uniform vec3 wakeStart;
+uniform vec3 wakeEnd;
+uniform bool emitting;
+
+void main() {
+    ivec2 cell=ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size=imageSize(foamState);
+    if(any(greaterThanEqual(cell,size))) return;
+    vec2 position=(vec2(cell)+0.5)/vec2(size)*2000.0-1000.0;
+    // Persistent world-space foam survives turns and stopping, with a 5 s half-life.
+    float foam=imageLoad(foamState,cell).r*exp(-0.1386294*dt);
+    vec2 path=wakeEnd.xz-wakeStart.xz;
+    float distanceSquared=dot(path,path);
+    if(emitting && distanceSquared>0.000001 && dt>0.0) {
+        float along=clamp(dot(position-wakeStart.xz,path)/distanceSquared,0.0,1.0);
+        float distanceToWake=length(position-mix(wakeStart.xz,wakeEnd.xz,along));
+        float speed=sqrt(distanceSquared)/dt;
+        float width=mix(2.0,4.0,clamp(speed/24.0,0.0,1.0));
+        float coverage=1.0-smoothstep(width*0.25,width,distanceToWake);
+        float strength=smoothstep(0.3,8.0,speed);
+        foam=max(foam,coverage*strength);
+    }
+    imageStore(foamState,cell,vec4(foam,0.0,0.0,0.0));
+}

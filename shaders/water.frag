@@ -10,6 +10,7 @@ uniform float atmosphereOpacity;
 uniform float time;
 uniform sampler2D reflectionTexture;
 uniform sampler2D terrainHeight;
+uniform sampler2D wakeFoam;
 uniform sampler2D cloudShadowMap;
 uniform bool cloudShadowsEnabled;
 uniform mat4 reflectionViewProjection;
@@ -97,6 +98,12 @@ void main() {
     float motionStrength=smoothstep(10.0,36.0,abs(waterVelocity));
     float motionFoam=motionStrength*smoothstep(0.30,0.68,brokenPattern);
     float foam=1.0-(1.0-shorelineFoam)*(1.0-motionFoam);
+    float wake=texture(wakeFoam,worldPosition.xz/2000.0+0.5).r;
+    // Break up the persistent trail into small bubbles as it dissipates.
+    float bubbles=foamNoise(worldPosition.xz*1.3+vec2(time*0.08,-time*0.06));
+    wake*=mix(0.4,1.0,smoothstep(0.2,0.75,bubbles));
+    wake*=smoothstep(0.0,0.5,waterDepth);
+    foam=1.0-(1.0-foam)*(1.0-wake);
     vec3 foamColor=mix(vec3(0.025,0.04,0.065),vec3(0.78,0.90,0.96),daylight);
     color=mix(color,foamColor,foam*0.92);
     alpha=1.0-(1.0-alpha)*(1.0-foam*0.86);

@@ -85,6 +85,22 @@ AircraftRenderer::AircraftRenderer(const std::filesystem::path& directory, Shape
             box({ side * 1.0f - 0.25f, 0.2f, 2.9f },
                 { side * 1.0f + 0.25f, 0.5f, 2.94f },
                 { 1.0f, 0.92f, 0.65f });
+    } else if (shape == Shape::Boat) {
+        const Vec3 rim[] = { { -1.8f, 0.8f, -3.6f }, { 1.8f, 0.8f, -3.6f },
+            { 2.0f, 0.8f, 1.5f }, { 0, 1.1f, 4.8f }, { -2.0f, 0.8f, 1.5f } };
+        const Vec3 keel{ 0, -1.0f, -0.5f };
+        for (int i = 0; i < 5; ++i) {
+            int next = (i + 1) % 5;
+            triangle(rim[next], keel, rim[i], { 0.12f, 0.28f, 0.42f });
+            triangle(rim[next], rim[i], { 0, 0.8f, 0 }, { 0.72f, 0.48f, 0.24f });
+        }
+        // Windshield, visible from both sides.
+        Vec3 a{ -1.3f, 0.8f, 0.5f }, b{ 1.3f, 0.8f, 0.5f };
+        Vec3 c{ 1.1f, 2.0f, 0.1f }, d{ -1.1f, 2.0f, 0.1f };
+        triangle(a, b, c, { 0.3f, 0.65f, 0.75f });
+        triangle(a, c, d, { 0.3f, 0.65f, 0.75f });
+        triangle(c, b, a, { 0.3f, 0.65f, 0.75f });
+        triangle(d, c, a, { 0.3f, 0.65f, 0.75f });
     } else if (shape == Shape::OffroadWheel) {
         constexpr int segments = 20;
         for (int i = 0; i < segments; ++i) {
@@ -261,6 +277,16 @@ WaterRenderer::WaterRenderer(const std::filesystem::path& directory) {
     shader_ = program(directory, "water");
     simulation_ = compute_program(directory, "water_sim");
     impact_ = compute_program(directory, "water_impact");
+    wake_ = compute_program(directory, "water_wake");
+    glGenTextures(1, &foam_);
+    glBindTexture(GL_TEXTURE_2D, foam_);
+    std::vector<float> initial_foam(size_t(foam_resolution_) * foam_resolution_, 0.0f);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, foam_resolution_, foam_resolution_, 0,
+        GL_RED, GL_FLOAT, initial_foam.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &ebo_);
     glBindVertexArray(vao_);
@@ -304,12 +330,28 @@ WaterRenderer::WaterRenderer(const std::filesystem::path& directory) {
 }
 
 WaterRenderer::~WaterRenderer() {
+    glDeleteTextures(1, &foam_);
+    glDeleteProgram(wake_);
+    glDeleteFramebuffers(1, &surface_read_fbo_);
     glDeleteTextures(GLsizei(states_.size()), states_.data());
     glDeleteBuffers(1, &ebo_);
     glDeleteVertexArrays(1, &vao_);
     glDeleteProgram(impact_);
     glDeleteProgram(simulation_);
     glDeleteProgram(shader_);
+}
+
+void WaterRenderer::update_wake(double elapsed, Vec3 start, Vec3 end, bool sailing) {
+    if (elapsed <= 0)
+        return;
+    glUseProgram(wake_);
+    uniform(wake_, "dt", float(elapsed));
+    uniform(wake_, "wakeStart", start);
+    uniform(wake_, "wakeEnd", end);
+    glUniform1i(glGetUniformLocation(wake_, "emitting"), sailing);
+    glBindImageTexture(0, foam_, 0, GL_FALSE, 0, GL_READ_WRITE, GL_R16F);
+    glDispatchCompute((foam_resolution_ + 15) / 16, (foam_resolution_ + 15) / 16, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 }
 
 void WaterRenderer::update(
@@ -367,6 +409,49 @@ void WaterRenderer::update(
     }
 }
 
+float WaterRenderer::surface(
+    Vec3 position, float water_level, bool simulation_enabled, Vec3& normal) {
+    normal = { 0, 1, 0 };
+    if (!simulation_enabled)
+        return water_level;
+
+    // Read only the patch under the hull, after this frame's wind/impact simulation.
+    constexpr float cell_size = 2000.0f / (resolution_ - 1);
+    float gx = std::clamp((position.x + 1000) / cell_size, 0.0f, float(resolution_ - 1));
+    float gz = std::clamp((position.z + 1000) / cell_size, 0.0f, float(resolution_ - 1));
+    int x = std::clamp(int(gx) - 1, 0, resolution_ - 4);
+    int z = std::clamp(int(gz) - 1, 0, resolution_ - 4);
+    if (!surface_read_fbo_)
+        glGenFramebuffers(1, &surface_read_fbo_);
+    GLint previous_fbo = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, surface_read_fbo_);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, states_[state_index_], 0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT);
+    std::array<float, 16> heights{};
+    glReadPixels(x, z, 4, 4, GL_RED, GL_FLOAT, heights.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(previous_fbo));
+
+    auto sample = [&](float px, float pz) {
+        px = std::clamp(px - x, 0.0f, 3.0f);
+        pz = std::clamp(pz - z, 0.0f, 3.0f);
+        int ix = std::min(int(px), 2), iz = std::min(int(pz), 2);
+        float u = px - ix, v = pz - iz;
+        float a = heights[iz * 4 + ix], b = heights[iz * 4 + ix + 1];
+        float c = heights[(iz + 1) * 4 + ix], d = heights[(iz + 1) * 4 + ix + 1];
+        // Match the rendered mesh's lower-left to upper-right diagonal.
+        return u >= v ? a + (b - a) * u + (d - b) * v
+                      : a + (d - c) * u + (c - a) * v;
+    };
+    constexpr float radius = 3.0f;
+    float offset = radius / cell_size;
+    normal = normalize(Vec3{ sample(gx - offset, gz) - sample(gx + offset, gz),
+        2 * radius, sample(gx, gz - offset) - sample(gx, gz + offset) });
+    return water_level + sample(gx, gz);
+}
+
 void WaterRenderer::draw(const Mat4& vp,
     const Mat4& reflection_vp,
     GLuint reflection_texture,
@@ -400,6 +485,9 @@ void WaterRenderer::draw(const Mat4& vp,
     glActiveTexture(GL_TEXTURE8);
     glBindTexture(GL_TEXTURE_2D, states_[state_index_]);
     glUniform1i(glGetUniformLocation(shader_, "waterState"), 8);
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D, foam_);
+    glUniform1i(glGetUniformLocation(shader_, "wakeFoam"), 9);
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_2D, cloud_shadow_texture);
     glUniform1i(glGetUniformLocation(shader_, "cloudShadowMap"), 5);
