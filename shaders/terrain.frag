@@ -12,6 +12,9 @@ uniform vec3 fogColor;
 uniform float atmosphereOpacity;
 uniform bool aircraftShadowEnabled;
 uniform vec3 aircraftPosition;
+uniform bool headlightsEnabled;
+uniform vec3 headlightPosition[2];
+uniform vec3 headlightDirection;
 uniform usampler2D terrainScorched;
 layout(std430,binding=7) readonly buffer TerrainWetness { uint wetness[]; };
 out vec4 fragColor;
@@ -140,6 +143,21 @@ void main() {
         float belowAircraft=step(0.0,aircraftHeight);
         float opacity=mix(0.48,0.16,heightFactor)*blob*altitudeFade*belowAircraft;
         color*=1.0-opacity;
+    }
+    // Two chassis-mounted spotlights, fading on at dusk and off at dawn.
+    float night=1.0-smoothstep(-0.08,0.12,sunDirection.y);
+    if(headlightsEnabled && night>0.0) {
+        for(int i=0;i<2;++i) {
+            vec3 fromLamp=worldPosition-headlightPosition[i];
+            float distanceToLamp=length(fromLamp);
+            vec3 ray=fromLamp/max(distanceToLamp,0.001);
+            float cone=smoothstep(0.82,0.95,dot(ray,headlightDirection));
+            float rangeFade=1.0-smoothstep(70.0,110.0,distanceToLamp);
+            float intensity=night*cone*rangeFade*24.0/(1.0+0.003*distanceToLamp*distanceToLamp);
+            float diffuse=max(dot(n,-ray),0.0);
+            float sheen=pow(max(dot(reflect(ray,n),viewDirection),0.0),48.0)*wetAmount*0.35;
+            color+=(albedo*diffuse+vec3(sheen))*vec3(1.0,0.94,0.80)*intensity;
+        }
     }
     float fog = 1.0 - exp(-hazeOpticalDepth(length(eye-worldPosition)));
     color = mix(color, fogColor, fog);

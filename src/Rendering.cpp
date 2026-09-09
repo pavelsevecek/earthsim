@@ -229,6 +229,15 @@ TerrainRenderer::~TerrainRenderer() {
     glDeleteProgram(shader_);
 }
 
+void TerrainRenderer::set_headlights(bool enabled, Vec3 position, Vec3 forward, Vec3 right, Vec3 up) {
+    glUseProgram(shader_);
+    glUniform1i(glGetUniformLocation(shader_, "headlightsEnabled"), enabled);
+    Vec3 front = position + forward * 2.95f + up * 0.35f;
+    uniform(shader_, "headlightPosition[0]", front - right);
+    uniform(shader_, "headlightPosition[1]", front + right);
+    uniform(shader_, "headlightDirection", normalize(forward - up * 0.12f));
+}
+
 void TerrainRenderer::draw(const Terrain& terrain,
     const TerrainShadows& shadows,
     const Rain& rain,

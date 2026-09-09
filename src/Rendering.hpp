@@ -51,6 +51,7 @@ class TerrainRenderer {
 public:
     explicit TerrainRenderer(const std::filesystem::path& directory);
     ~TerrainRenderer();
+    void set_headlights(bool enabled, Vec3 position, Vec3 forward, Vec3 right, Vec3 up);
     void draw(const Terrain& terrain,
         const TerrainShadows& shadows,
         const Rain& rain,

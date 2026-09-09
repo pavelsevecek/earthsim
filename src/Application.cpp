@@ -875,6 +875,8 @@ void AppState::frame() {
         float(reflection_.width()) / float(reflection_.height()));
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CLIP_DISTANCE0);
+    terrain_renderer_.set_headlights(driving_ && !vehicle_.destroyed,
+        vehicle_.body_position(), vehicle_.forward, vehicle_.right, vehicle_.up);
     terrain_renderer_.draw(terrain_,
         shadows_,
         rain_,
