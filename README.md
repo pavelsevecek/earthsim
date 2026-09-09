@@ -1,10 +1,6 @@
 # EarthSim
 
-EarthSim is a C++17/OpenGL 4.3 terrain and weather simulator. It renders procedurally generated mountain ranges, water, volumetric weather and explosion clouds, particle-based lava and rain, meteors, lightning, atmospheric effects, and a day-night cycle. Explosion plumes use a localized GPU fluid volume for buoyant smoke, heat, wind advection, and a rolling mushroom-cloud cap. GLFW, GLEW, and Dear ImGui are included under `externals`.
-
-Use **Explosion**, choose an **Explosion size**, and click the terrain to create a crater, ejecta, an expanding blast shell, and a simulated plume. The current implementation keeps one high-resolution plume active at a time; a new explosion replaces the previous plume.
-
-Choose **Drive** to spawn an offroad vehicle at a random surface location, preferring dry, gentle ground. Use **W/S** for forward/reverse, **A/D** to steer, and **Space** to brake. The four wheels support the chassis through spring suspension and apply tire forces at their contact points. The vehicle preserves linear and angular momentum through jumps: uneven ground and impacts can pitch, roll, or tumble it, and gravity brings it back down. Rotation uses spherical inertia, I = (2/5) m r^2, with a 1200 kg mass and a 2.5 m effective inertia radius. Chassis and wheel impacts account for both translation and rotation. Steering, acceleration, and braking require wheel contact; entering the ocean destroys it with a water impact, without a crater or terrain ejecta. Steering retains its full range at every speed. Hold the **right mouse button** to orbit the chase camera and use the **mouse wheel** to zoom. **Stop** returns to the terrain view. Driving follows the simulation time speed, including pause.
+EarthSim is a C++17/OpenGL 4.3 terrain and weather simulator. It renders procedurally generated mountain ranges, water, volumetric weather and explosion clouds, particle-based lava and rain, meteors, lightning, atmospheric effects, and a day-night cycle. GLFW, GLEW, and Dear ImGui are included under `externals`.
 
 ## Build
 
